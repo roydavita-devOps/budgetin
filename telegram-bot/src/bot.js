@@ -39,7 +39,19 @@ async function handleMessage(message) {
   const chatId = message.chat.id;
 
   if (text === '/start' || text === '/help') {
-    return sendMessage(chatId, 'Pakai: /add 50000 food makan siang atau /income 250000 salary freelance');
+    return sendMessage(
+      chatId,
+      [
+        'Budgentin siap.',
+        'Tambah pengeluaran: /add 50000 food makan siang',
+        'Tambah pemasukan: /income 250000 salary freelance',
+        'Cek ringkasan: /summary',
+      ].join('\n'),
+    );
+  }
+
+  if (text === '/summary') {
+    return sendSummary(chatId);
   }
 
   const parsed = parseCommand(text);
@@ -60,6 +72,30 @@ async function handleMessage(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
     return sendMessage(chatId, `Tersimpan: ${parsed.type} ${parsed.amount} ${parsed.category}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendSummary(chatId) {
+  try {
+    await ensureAuth();
+    const response = await fetch(`${backendUrl}/analytics/summary`, {
+      headers: { Authorization: `Bearer ${jwtToken}` },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil summary');
+
+    const { income, expense, balance } = body.data;
+    return sendMessage(
+      chatId,
+      [
+        'Ringkasan Budgentin',
+        `Income: ${formatIdr(income)}`,
+        `Expense: ${formatIdr(expense)}`,
+        `Balance: ${formatIdr(balance)}`,
+      ].join('\n'),
+    );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -118,4 +154,12 @@ async function sendMessage(chatId, text) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatIdr(value) {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0,
+  }).format(value || 0);
 }
