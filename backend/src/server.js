@@ -212,5 +212,5 @@ app.use((error, _req, res, _next) => {
 });
 
 app.listen(port, () => {
-  console.log(`Budgentin API listening on ${port}`);
+  console.log(`Budgetin API listening on ${port}`);
 });

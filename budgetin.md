@@ -1,6 +1,6 @@
-# Budgentin Implementation Plan
+# Budgetin Implementation Plan
 
-Budgentin adalah aplikasi pencatat pemasukan dan pengeluaran yang berjalan lewat web dashboard dan Telegram bot. Target lokal: seluruh service bisa dijalankan dengan `docker-compose up`.
+Budgetin adalah aplikasi pencatat pemasukan dan pengeluaran yang berjalan lewat web dashboard dan Telegram bot. Target lokal: seluruh service bisa dijalankan dengan `docker-compose up`.
 
 ## Scope MVP
 

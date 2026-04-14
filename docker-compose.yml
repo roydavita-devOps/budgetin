@@ -1,17 +1,19 @@
+name: budgetin
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-budgentin}
-      POSTGRES_USER: ${POSTGRES_USER:-budgentin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-budgentin_password}
+      POSTGRES_DB: ${POSTGRES_DB:-budgetin}
+      POSTGRES_USER: ${POSTGRES_USER:-budgetin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-budgetin_password}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-budgentin} -d ${POSTGRES_DB:-budgentin}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-budgetin} -d ${POSTGRES_DB:-budgetin}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +32,7 @@ services:
     build:
       context: ./backend
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://budgentin:budgentin_password@postgres:5432/budgentin}
+      DATABASE_URL: ${DATABASE_URL:-postgres://budgetin:budgetin_password@postgres:5432/budgetin}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
       PORT: 4000

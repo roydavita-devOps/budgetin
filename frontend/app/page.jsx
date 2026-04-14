@@ -72,7 +72,7 @@ export default function Home() {
       <section className="border-b border-[#d8e1dc] bg-[#edf4ef]">
         <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.08em] text-[#21745b]">Budgentin</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.08em] text-[#21745b]">Budgetin</p>
             <h1 className="mt-2 text-4xl font-bold text-[#15221c]">Catat uang masuk dan keluar.</h1>
             <p className="mt-3 max-w-2xl text-[#4c5e55]">
               Dashboard sederhana untuk transaksi harian, ringkasan saldo, dan input cepat via Telegram.

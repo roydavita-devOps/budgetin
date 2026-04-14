@@ -19,7 +19,7 @@ if (!token) {
 }
 
 async function poll() {
-  console.log('Budgentin Telegram bot started.');
+  console.log('Budgetin Telegram bot started.');
   while (true) {
     try {
       const updates = await telegram('getUpdates', { timeout: 25, offset });
@@ -42,7 +42,7 @@ async function handleMessage(message) {
     return sendMessage(
       chatId,
       [
-        'Budgentin siap.',
+        'Budgetin siap.',
         'Tambah pengeluaran: /add 50000 food makan siang',
         'Tambah pemasukan: /income 250000 salary freelance',
         'Cek ringkasan: /summary',
@@ -90,7 +90,7 @@ async function sendSummary(chatId) {
     return sendMessage(
       chatId,
       [
-        'Ringkasan Budgentin',
+        'Ringkasan Budgetin',
         `Income: ${formatIdr(income)}`,
         `Expense: ${formatIdr(expense)}`,
         `Balance: ${formatIdr(balance)}`,

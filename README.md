@@ -1,4 +1,4 @@
-# Budgentin
+# Budgetin
 
 Financial tracker app untuk mencatat pemasukan dan pengeluaran melalui web dashboard dan Telegram bot.
 
