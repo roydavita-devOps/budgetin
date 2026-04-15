@@ -1,0 +1,327 @@
+Plan penjualan dan komersialisasi Budgetin.
+
+Target market jangka pendek:
+
+Budgetin sebaiknya difokuskan dulu untuk personal user, bukan bisnis atau perusahaan.
+
+Positioning yang disarankan:
+
+Pencatat pengeluaran pribadi lewat Telegram.
+
+Atau:
+
+Catat pengeluaran harian semudah chat.
+
+Alasan target personal cocok:
+
+1. Problem jelas: banyak orang ingin mencatat pengeluaran, tetapi malas membuka aplikasi khusus.
+2. Telegram membuat input transaksi lebih ringan karena user cukup chat.
+3. Scope produk lebih kecil dan realistis.
+4. Risiko operasional lebih terkendali dibanding aplikasi bisnis.
+5. Validasi market lebih mudah dilakukan ke teman, keluarga, dan komunitas kecil.
+
+Status produk saat ini:
+
+Budgetin sudah punya pondasi MVP:
+
+- register/login via Telegram OTP
+- dashboard pribadi per user
+- input transaksi via Telegram
+- kategori standar
+- filter dan export CSV
+- delete transaksi via Telegram
+- dashboard name customization via Telegram
+- persistent login dan logout
+
+Namun untuk komersial publik, Budgetin masih perlu hardening:
+
+- security
+- privacy policy
+- terms of service
+- data deletion policy
+- database migration yang lebih rapi
+- backup data
+- rate limit OTP
+- monitoring dan logging
+- deployment production
+
+Rekomendasi tahap validasi:
+
+1. Private beta
+   - dipakai sendiri dan 5-10 user dekat
+   - tujuan: cari bug dan validasi habit input lewat Telegram
+
+2. Closed paid pilot
+   - 10-30 user
+   - harga kecil
+   - tujuan: cek apakah user benar-benar mau bayar
+
+3. Production hardening
+   - security
+   - backup
+   - monitoring
+   - legal docs
+
+4. Public launch
+   - dilakukan setelah produk stabil dan pricing jelas
+
+Model subscription:
+
+Subscription cocok untuk Budgetin, tetapi jangan mengunci core value terlalu cepat. User personal cenderung sensitif terhadap biaya bulanan.
+
+Prinsip:
+
+Free = cukup untuk mulai mencatat
+Premium = membantu user memahami dan mengelola uangnya lebih baik
+
+Free Plan:
+
+- input transaksi via Telegram
+- dashboard basic
+- kategori standar
+- summary saldo
+- limit transaksi, misalnya 100 transaksi per bulan
+- export terbatas, misalnya bulan berjalan
+- data history terbatas, misalnya 3 bulan terakhir
+
+Premium Plan:
+
+- transaksi unlimited
+- export CSV/XLSX unlimited
+- export berdasarkan kategori dan bulan
+- laporan bulanan otomatis via Telegram
+- reminder harian/mingguan
+- history tanpa batas
+- custom nama dashboard
+- custom kategori tambahan
+- insight sederhana:
+  - pengeluaran terbesar bulan ini
+  - kategori paling boros
+  - naik/turun dibanding bulan lalu
+
+Fitur yang cocok untuk Premium:
+
+- export advanced
+- laporan otomatis
+- history panjang
+- reminder
+- insight bulanan
+- custom kategori
+
+Fitur yang sebaiknya tetap Free:
+
+- input transaksi
+- dashboard basic
+- kategori standar
+- summary basic
+
+Rekomendasi harga subscription awal:
+
+- Premium Monthly: Rp15.000 / bulan
+- Premium Yearly: Rp149.000 / tahun
+
+Atau saat beta:
+
+- Premium Beta: Rp10.000 / bulan
+
+Saran:
+
+Untuk tahap awal, cukup buat 2 plan:
+
+- Free
+- Premium
+
+Jangan terlalu cepat membuat banyak plan seperti Family, Pro, atau Lifetime sebelum ada user aktif.
+
+Alternatif selain subscription:
+
+1. One-Time Purchase
+
+User bayar sekali untuk membuka fitur premium.
+
+Contoh:
+
+- Free
+- Premium Lifetime: Rp99.000 - Rp199.000 sekali bayar
+
+Kelebihan:
+
+- lebih mudah diterima user personal
+- tidak terasa seperti beban langganan
+- cocok untuk early adopter
+
+Kekurangan:
+
+- revenue tidak recurring
+- jika biaya server naik, user lama tetap harus dilayani
+
+Ide awal:
+
+Lifetime Early Access: Rp99.000
+
+2. Freemium + Paid Export
+
+Core app gratis, tetapi export tertentu berbayar.
+
+Contoh:
+
+- input dan dashboard: gratis
+- export CSV bulan berjalan: gratis terbatas
+- export semua data / XLSX / laporan tahunan: berbayar
+
+Harga contoh:
+
+- Rp5.000 per export lengkap
+- Rp15.000 paket 5 export
+- Rp29.000 export unlimited 1 bulan
+
+Kelebihan:
+
+- user bayar saat ada kebutuhan nyata
+- cocok karena export adalah salah satu value utama Budgetin
+
+Kekurangan:
+
+- revenue tidak stabil
+- user yang jarang export mungkin tidak bayar
+
+3. Pay-As-You-Need
+
+User membeli fitur tertentu, bukan langganan penuh.
+
+Contoh:
+
+- Reminder bulanan: Rp10.000
+- Export tahunan: Rp10.000
+- Template laporan: Rp15.000
+
+Kelebihan:
+
+- fleksibel
+- user tidak merasa dipaksa subscribe
+
+Kekurangan:
+
+- UX pricing bisa rumit
+- perlu tracking entitlement per fitur
+
+4. Donation / Supporter Plan
+
+Aplikasi gratis, user bisa mendukung pengembangan.
+
+Contoh:
+
+- Support Budgetin: Rp10.000
+- Support Budgetin: Rp25.000
+- Support Budgetin: Rp50.000
+
+Kelebihan:
+
+- cocok untuk komunitas kecil
+- tidak membuat barrier penggunaan
+
+Kekurangan:
+
+- revenue sulit diprediksi
+- conversion biasanya kecil
+
+5. Lifetime + Optional Subscription
+
+Gabungan antara pembayaran sekali dan subscription.
+
+Contoh:
+
+- Free
+- Lifetime Basic Premium: Rp149.000
+- Cloud Automation Plus: Rp15.000 / bulan
+
+Fitur lifetime:
+
+- export unlimited
+- custom kategori
+- dashboard personal
+
+Fitur subscription:
+
+- laporan otomatis bulanan
+- backup cloud
+- reminder Telegram
+- fitur yang membutuhkan biaya server rutin
+
+Model ini cukup adil:
+
+- fitur yang tidak membebani server bisa dijual sekali
+- fitur yang berjalan terus bisa dibayar bulanan
+
+6. B2C Gratis, Monetisasi Template / Report
+
+User mencatat gratis, lalu membayar laporan atau template analisis.
+
+Contoh:
+
+- laporan bulanan detail: Rp10.000
+- laporan tahunan: Rp25.000
+- template budgeting: Rp15.000
+
+Kelebihan:
+
+- user membayar output yang jelas
+- cocok untuk orang yang butuh rekap evaluasi
+
+Kekurangan:
+
+- laporan harus benar-benar bernilai
+
+7. White Label / Custom Bot
+
+Untuk jangka menengah, Budgetin bisa dijual sebagai bot custom untuk komunitas, coach finansial, atau creator.
+
+Contoh:
+
+- bot pencatat keuangan komunitas
+- bot custom brand pribadi
+
+Kelebihan:
+
+- nilai jual lebih tinggi
+- bisa charge setup fee
+
+Kekurangan:
+
+- masuk ke B2B/service
+- support lebih berat
+- belum cocok untuk tahap awal
+
+Rekomendasi terbaik untuk tahap awal:
+
+Free + Lifetime Early Access.
+
+Contoh:
+
+Free:
+
+- input transaksi
+- dashboard basic
+- kategori standar
+- history 3 bulan
+- export bulan berjalan
+
+Lifetime Early Access Rp99.000:
+
+- history unlimited
+- export unlimited
+- custom kategori
+- laporan bulanan
+- reminder
+- fitur premium berikutnya selama beta
+
+Alasan:
+
+Untuk personal finance app baru, user mungkin belum langsung percaya untuk langganan. Lifetime Early Access lebih mudah dijual ke 10-30 user awal. Setelah fitur yang paling sering dipakai sudah jelas, subscription bisa dipertimbangkan kembali.
+
+Kesimpulan:
+
+- Jika ingin cepat validasi: Lifetime Early Access
+- Jika ingin revenue jangka panjang: Subscription
+- Jika ingin barrier rendah: Paid Export
+- Jika ingin paling realistis sekarang: Free + Lifetime Early Access dulu, subscription nanti

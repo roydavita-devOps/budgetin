@@ -1,0 +1,176 @@
+Rekomendasi terbaik: pakai Telegram-first authentication, bukan SMS OTP murni.
+
+Alasannya: Telegram Bot API tidak bisa langsung mengirim OTP ke nomor telepon kalau user belum pernah membuka bot. Bot Telegram hanya bisa kirim pesan ke chat_id user yang sudah interaksi dengan bot. Jadi kalau register hanya input nomor HP di web, lalu kita berharap bot mengirim OTP ke Telegram user berdasarkan nomor itu, itu tidak reliable dan pada praktiknya tidak bisa dilakukan langsung dengan Bot API biasa.
+
+Flow terbaik untuk Budgetin:
+
+1. User buka bot Telegram Budgetin.
+2. User tekan /start.
+3. Bot tampilkan tombol Share Phone Number.
+4. User share contact Telegram-nya ke bot.
+5. Backend menyimpan:
+   - telegram_user_id
+   - telegram_chat_id
+   - phone_number
+6. Bot mengirim OTP ke chat Telegram user tersebut.
+7. User buka web Budgetin.
+8. User login/register dengan nomor telepon + OTP.
+9. Backend verifikasi OTP.
+10. User masuk ke dashboard pribadinya.
+11. Setiap transaksi dari Telegram otomatis masuk ke akun user tersebut, bukan lagi akun bot global.
+
+Ini membuat integrasi private per user berjalan rapi.
+
+Struktur data yang disarankan:
+
+users
+- id
+- phone_number
+- created_at
+
+telegram_accounts
+- id
+- user_id
+- telegram_user_id
+- telegram_chat_id
+- phone_number
+- username
+- first_name
+- linked_at
+
+otp_codes
+- id
+- phone_number
+- code_hash
+- purpose
+- expires_at
+- consumed_at
+- created_at
+
+Perubahan besar dari sistem sekarang:
+
+Saat ini:
+Telegram bot -> pakai telegram@budgetin.local -> semua transaksi masuk ke satu akun
+
+Nanti:
+Telegram bot -> baca telegram_user_id/chat_id -> cari user terkait -> transaksi masuk ke akun user itu
+
+API yang perlu dibuat:
+
+- POST /auth/request-otp
+- POST /auth/verify-otp
+- POST /telegram/contact
+- GET /me
+
+Command bot yang perlu diubah:
+
+- /start
+- /add 50000 food makan siang
+- /income 250000 salary freelance
+- /summary
+
+Kalau user belum share contact/link akun, command /add harus dibalas:
+
+Akun belum terhubung. Tekan tombol Share Phone Number dulu.
+
+Rekomendasi implementasi bertahap:
+
+1. Ubah database schema untuk support phone_number, telegram_accounts, dan otp_codes.
+2. Ubah auth backend dari email/password menjadi phone + OTP.
+3. Ubah bot agar meminta contact Telegram dan menyimpan telegram_user_id/chat_id.
+4. Ubah bot agar transaksi disimpan berdasarkan Telegram account milik user.
+5. Ubah frontend login menjadi nomor HP + OTP.
+6. Setelah stabil, hapus dependency email/password lama.
+
+Kalau mau OTP benar-benar dikirim ke SMS, baru perlu provider eksternal seperti Twilio atau provider lokal. Tapi untuk Budgetin, lebih disarankan OTP via Telegram chat, karena lebih murah, lebih simpel, dan sesuai goal integrasi Telegram private per user.
+
+Tambahan fitur yang disarankan: delete transaksi dan export laporan.
+
+Delete transaksi:
+
+Fitur delete memungkinkan user menghapus transaksi yang salah input dari Telegram maupun dashboard web. Untuk Telegram, command paling nyaman bukan langsung memakai transaction_id, karena user tidak tahu ID asli transaksi.
+
+Flow yang disarankan:
+
+1. User kirim /last.
+2. Bot menampilkan transaksi terakhir milik user:
+   1. expense Rp50.000 food - makan siang
+   2. income Rp250.000 salary - freelance
+3. User kirim /delete 1.
+4. Bot menerjemahkan nomor 1 ke transaction_id asli.
+5. Backend menghapus transaksi hanya jika transaksi itu milik user tersebut.
+
+Command yang disarankan:
+
+- /last
+- /delete 1
+
+API backend yang perlu ditambah:
+
+- DELETE /transactions/:id
+
+Aturan penting:
+
+- User hanya boleh menghapus transaksi miliknya sendiri.
+- Bot tidak boleh menghapus transaksi jika akun Telegram belum terhubung ke user.
+- Setelah delete berhasil, cache summary harus dihapus atau dihitung ulang.
+
+Export laporan:
+
+Fitur export memungkinkan user mengunduh data transaksi sebagai file yang bisa dibuka di Excel. Untuk MVP, format CSV lebih disarankan daripada XLSX karena lebih ringan, mudah dibuat, dan tetap bisa dibuka langsung di Excel.
+
+Flow export manual:
+
+1. User kirim /export.
+2. Bot mengambil transaksi milik user.
+3. Backend membuat file CSV.
+4. Bot mengirim file ke Telegram user.
+
+Command yang disarankan:
+
+- /export
+- /export bulan-ini
+- /export 2026-04
+
+API backend yang perlu ditambah:
+
+- GET /exports/transactions.csv
+
+Format kolom export:
+
+- date
+- type
+- amount
+- category
+- note
+
+Export otomatis:
+
+Setelah fitur manual stabil, bisa ditambahkan export otomatis bulanan.
+
+Flow export otomatis:
+
+1. Scheduler berjalan setiap tanggal 1.
+2. Sistem mengambil transaksi bulan sebelumnya.
+3. Sistem membuat CSV/XLSX.
+4. Bot mengirim laporan ke chat Telegram masing-masing user.
+
+Untuk export otomatis, perlu tambahan:
+
+- scheduler service atau cron job
+- preferensi user untuk aktif/nonaktif laporan bulanan
+- timezone user, minimal default Asia/Jakarta
+
+Command tambahan yang bisa dipakai nanti:
+
+- /report_on
+- /report_off
+- /report_status
+
+Prioritas implementasi:
+
+1. Selesaikan auth per-user Telegram terlebih dahulu.
+2. Tambahkan /last dan /delete.
+3. Tambahkan export CSV manual lewat /export.
+4. Setelah stabil, tambahkan export otomatis bulanan.
+5. Jika format CSV tidak cukup, baru upgrade ke XLSX dengan library seperti exceljs.

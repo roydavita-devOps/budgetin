@@ -1,0 +1,165 @@
+Rekomendasi kategori, filter, dan export Budgetin.
+
+Tujuan:
+
+Kategori dibuat standar supaya dashboard mudah dibaca dan data bisa di-export berdasarkan kategori tertentu. Ini berguna ketika user tidak ingin export semua data, tetapi hanya ingin mengambil data sesuai kebutuhan, misalnya hanya transportasi, hanya makan dan minum, atau hanya pemasukan freelance.
+
+Kategori standar:
+
+Expense:
+- food_drink: Makan & Minum
+- transport: Transportasi
+- other_expense: Lain-Lain
+
+Income:
+- salary: Gaji Pokok
+- freelance: Freelance
+
+Alasan memakai kode kategori:
+
+Data sebaiknya menyimpan category sebagai kode stabil seperti food_drink, transport, salary, dan freelance. Label seperti Makan & Minum atau Gaji Pokok hanya dipakai untuk tampilan.
+
+Keuntungan:
+
+- Data lebih konsisten.
+- Export lebih mudah difilter.
+- Label kategori bisa diganti tanpa merusak data lama.
+- Input dari web dan Telegram bisa tetap fleksibel.
+
+Mapping input user:
+
+- food, drink, makan, minum, kopi, snack -> food_drink
+- kendaraan, transport, transpot, bensin, parkir, tol, ojek -> transport
+- lain, lainnya, other, misc -> other_expense
+- gaji, salary, gaji pokok -> salary
+- freelance, project, sampingan -> freelance
+
+Jika user memasukkan kategori pengeluaran yang tidak cocok dengan food_drink atau transport, sistem bisa otomatis memasukkan ke other_expense.
+
+Filter dashboard:
+
+Filter type:
+- Semua
+- Pemasukan
+- Pengeluaran
+
+Filter kategori:
+- Semua kategori
+- Makan & Minum
+- Transportasi
+- Lain-Lain
+- Gaji Pokok
+- Freelance
+
+Sort:
+- Terbaru
+- Terlama
+- Nominal terbesar
+- Nominal terkecil
+
+Ringkasan dashboard:
+
+- Total pemasukan
+- Total pengeluaran
+- Saldo
+- Pengeluaran per kategori
+- Pemasukan per kategori
+- Daftar transaksi yang bisa difilter dan di-sort
+
+Desain export:
+
+Export manual dari Telegram:
+
+- /export
+- /export expense
+- /export income
+- /export food_drink
+- /export transport
+- /export other_expense
+- /export salary
+- /export freelance
+
+Export dengan periode:
+
+- /export 2026-04
+- /export expense 2026-04
+- /export income 2026-04
+- /export food_drink 2026-04
+- /export transport 2026-04
+- /export salary 2026-04
+- /export freelance 2026-04
+
+Format command:
+
+/export <filter> <periode>
+
+Catatan:
+
+- filter bersifat opsional
+- periode bersifat opsional
+- periode memakai format YYYY-MM
+- jika filter kosong, export semua transaksi
+- jika periode kosong, export seluruh periode atau default bulan berjalan, tergantung keputusan produk
+
+Rekomendasi default:
+
+- /export -> export semua transaksi
+- /export 2026-04 -> export semua transaksi pada April 2026
+- /export food_drink -> export semua transaksi kategori Makan & Minum
+- /export food_drink 2026-04 -> export Makan & Minum pada April 2026
+
+Desain export dari web:
+
+Tombol atau pilihan export:
+
+- Export semua
+- Export pemasukan
+- Export pengeluaran
+- Export per kategori
+- Export berdasarkan bulan
+- Export berdasarkan kategori dan bulan
+
+API backend yang disarankan:
+
+- GET /exports/transactions.csv
+
+Query parameter:
+
+- type=income
+- type=expense
+- category=food_drink
+- month=2026-04
+
+Contoh:
+
+- GET /exports/transactions.csv
+- GET /exports/transactions.csv?type=expense
+- GET /exports/transactions.csv?category=transport
+- GET /exports/transactions.csv?category=food_drink&month=2026-04
+- GET /exports/transactions.csv?type=income&month=2026-04
+
+Format kolom export:
+
+- date
+- type
+- category
+- category_label
+- amount
+- note
+
+Contoh isi CSV:
+
+date,type,category,category_label,amount,note
+2026-04-15,expense,food_drink,Makan & Minum,50000,makan siang
+2026-04-15,expense,transport,Transportasi,30000,bensin motor
+2026-04-15,income,freelance,Freelance,250000,project landing page
+2026-04-15,income,salary,Gaji Pokok,7000000,gaji april
+
+Prioritas implementasi:
+
+1. Standarisasi kategori di backend.
+2. Update form frontend agar memakai kategori tetap berdasarkan type transaksi.
+3. Tambahkan filter dan sort di dashboard.
+4. Tambahkan endpoint export CSV dengan query parameter type, category, dan month.
+5. Tambahkan command Telegram /export setelah auth per-user Telegram selesai.
+6. Jika CSV tidak cukup, upgrade ke XLSX dengan library seperti exceljs.
