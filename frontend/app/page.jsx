@@ -27,8 +27,10 @@ function formatCurrency(value) {
 }
 
 export default function Home() {
-  const [email, setEmail] = useState('demo@budgetin.local');
-  const [password, setPassword] = useState('secret123');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
   const [summary, setSummary] = useState(null);
   const [transactions, setTransactions] = useState([]);
@@ -51,12 +53,32 @@ export default function Home() {
     return body;
   }
 
-  async function login(mode = 'login') {
-    const body = await request(`/auth/${mode}`, {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
-    setToken(body.token);
+  async function requestOtp() {
+    try {
+      setAuthMessage('');
+      const body = await request('/auth/request-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone_number: phoneNumber }),
+      });
+      setAuthMessage(body.message || 'OTP dikirim ke Telegram.');
+    } catch (error) {
+      setAuthMessage(error.message);
+    }
+  }
+
+  async function verifyOtp() {
+    try {
+      setAuthMessage('');
+      const body = await request('/auth/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone_number: phoneNumber, code: otpCode }),
+      });
+      setUser(body.user);
+      setToken(body.token);
+      setAuthMessage('Login berhasil.');
+    } catch (error) {
+      setAuthMessage(error.message);
+    }
   }
 
   async function loadData() {
@@ -127,13 +149,18 @@ export default function Home() {
               Dashboard sederhana untuk transaksi harian, ringkasan saldo, dan input cepat via Telegram.
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <input className="rounded border border-[#cbd8d1] px-3 py-2" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input className="rounded border border-[#cbd8d1] px-3 py-2" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <div className="flex gap-2">
-              <button className="rounded bg-[#21745b] px-4 py-2 font-semibold text-white" onClick={() => login('login')}>Login</button>
-              <button className="rounded border border-[#21745b] px-4 py-2 font-semibold text-[#21745b]" onClick={() => login('register')}>Register</button>
+          <div className="grid gap-2 md:min-w-[520px]">
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="+6281234567890" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
+              <button className="rounded border border-[#21745b] px-4 py-2 font-semibold text-[#21745b]" onClick={requestOtp}>Kirim OTP</button>
             </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="Kode OTP" value={otpCode} onChange={(e) => setOtpCode(e.target.value)} />
+              <button className="rounded bg-[#21745b] px-4 py-2 font-semibold text-white" onClick={verifyOtp}>Masuk</button>
+            </div>
+            <p className="text-sm text-[#4c5e55]">
+              {authMessage || (user ? `Login sebagai ${user.phone_number}` : 'Buka bot Telegram Budgetin, tekan /start, lalu share phone number sebelum meminta OTP.')}
+            </p>
           </div>
         </div>
       </section>

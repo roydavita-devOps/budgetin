@@ -27,12 +27,20 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 
 ## API
 
-Register:
+Register/login via OTP:
 
 ```bash
-curl -X POST http://localhost:4000/auth/register \
+curl -X POST http://localhost:4000/auth/request-otp \
   -H "Content-Type: application/json" \
-  -d '{"email":"demo@budgetin.local","password":"secret123"}'
+  -d '{"phone_number":"+6281234567890"}'
+```
+
+Verify OTP:
+
+```bash
+curl -X POST http://localhost:4000/auth/verify-otp \
+  -H "Content-Type: application/json" \
+  -d '{"phone_number":"+6281234567890","code":"123456"}'
 ```
 
 Create transaction:

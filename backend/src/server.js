@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import cors from 'cors';
+import crypto from 'crypto';
 import express from 'express';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
@@ -10,6 +11,8 @@ import { query } from './db.js';
 const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'development_secret';
+const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
 
 const CATEGORY_DEFINITIONS = {
   expense: [
@@ -35,7 +38,7 @@ redis.on('error', (error) => console.error('Redis error:', error.message));
 redis.connect().catch((error) => console.error('Redis connect failed:', error.message));
 
 function signToken(user) {
-  return jwt.sign({ sub: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
+  return jwt.sign({ sub: user.id, email: user.email, phone_number: user.phone_number }, jwtSecret, { expiresIn: '7d' });
 }
 
 function authRequired(req, res, next) {
@@ -48,11 +51,98 @@ function authRequired(req, res, next) {
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    req.user = { id: payload.sub, email: payload.email };
+    req.user = { id: payload.sub, email: payload.email, phone_number: payload.phone_number };
     return next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+}
+
+function botInternalRequired(req, res, next) {
+  if (req.headers['x-bot-token'] !== botInternalToken) {
+    return res.status(401).json({ error: 'Invalid bot token' });
+  }
+  return next();
+}
+
+function normalizePhone(phoneNumber) {
+  const raw = String(phoneNumber || '').trim();
+  const cleaned = raw.replace(/[^\d+]/g, '');
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('0')) return `+62${cleaned.slice(1)}`;
+  if (cleaned.startsWith('62')) return `+${cleaned}`;
+  return cleaned ? `+${cleaned}` : '';
+}
+
+function generateOtp() {
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+async function createOtp(phoneNumber, purpose = 'login') {
+  const code = generateOtp();
+  const codeHash = await bcrypt.hash(code, 10);
+  await query(
+    `INSERT INTO otp_codes (phone_number, code_hash, purpose, expires_at)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
+    [phoneNumber, codeHash, purpose],
+  );
+  return code;
+}
+
+async function sendTelegramOtp(chatId, code) {
+  if (!telegramBotToken || !chatId) return false;
+
+  const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: `Kode OTP Budgetin kamu: ${code}\nKode berlaku 10 menit.`,
+    }),
+  });
+
+  return response.ok;
+}
+
+async function findTelegramAccountByPhone(phoneNumber) {
+  const result = await query(
+    `SELECT telegram_chat_id
+     FROM telegram_accounts
+     WHERE phone_number = $1
+     ORDER BY linked_at DESC
+     LIMIT 1`,
+    [phoneNumber],
+  );
+  return result.rows[0];
+}
+
+async function ensureDatabaseSchema() {
+  await query('ALTER TABLE users ALTER COLUMN email DROP NOT NULL').catch(() => {});
+  await query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT UNIQUE');
+  await query(`
+    CREATE TABLE IF NOT EXISTS telegram_accounts (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      telegram_user_id TEXT NOT NULL UNIQUE,
+      telegram_chat_id TEXT NOT NULL,
+      phone_number TEXT NOT NULL,
+      username TEXT,
+      first_name TEXT,
+      linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS otp_codes (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      phone_number TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'login',
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 function normalizeInput(value) {
@@ -191,6 +281,109 @@ app.post('/auth/login', async (req, res) => {
     user: { id: user.id, email: user.email, created_at: user.created_at },
     token: signToken(user),
   });
+});
+
+app.post('/auth/request-otp', async (req, res) => {
+  const phoneNumber = normalizePhone(req.body.phone_number);
+  if (!phoneNumber || phoneNumber.length < 8) {
+    return res.status(400).json({ error: 'phone_number is required' });
+  }
+
+  const account = await findTelegramAccountByPhone(phoneNumber);
+  if (!account) {
+    return res.status(404).json({
+      error: 'Nomor belum terhubung dengan Telegram. Buka bot Budgetin, tekan /start, lalu share phone number.',
+    });
+  }
+
+  const code = await createOtp(phoneNumber);
+  const sent = await sendTelegramOtp(account.telegram_chat_id, code);
+  if (!sent) return res.status(502).json({ error: 'Gagal mengirim OTP ke Telegram' });
+
+  return res.json({ message: 'OTP dikirim ke Telegram', expires_in_seconds: 600 });
+});
+
+app.post('/auth/verify-otp', async (req, res) => {
+  const phoneNumber = normalizePhone(req.body.phone_number);
+  const code = String(req.body.code || '').trim();
+
+  if (!phoneNumber || !/^\d{6}$/.test(code)) {
+    return res.status(400).json({ error: 'phone_number and 6 digit code are required' });
+  }
+
+  const otpResult = await query(
+    `SELECT id, code_hash
+     FROM otp_codes
+     WHERE phone_number = $1
+       AND purpose = 'login'
+       AND consumed_at IS NULL
+       AND expires_at > NOW()
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [phoneNumber],
+  );
+  const otp = otpResult.rows[0];
+  if (!otp || !(await bcrypt.compare(code, otp.code_hash))) {
+    return res.status(401).json({ error: 'OTP tidak valid atau sudah kedaluwarsa' });
+  }
+
+  await query('UPDATE otp_codes SET consumed_at = NOW() WHERE id = $1', [otp.id]);
+
+  const userResult = await query(
+    `INSERT INTO users (phone_number)
+     VALUES ($1)
+     ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
+     RETURNING id, email, phone_number, created_at`,
+    [phoneNumber],
+  );
+  const user = userResult.rows[0];
+  await seedDefaultCategories(user.id);
+
+  return res.json({ user, token: signToken(user) });
+});
+
+app.get('/me', authRequired, async (req, res) => {
+  const result = await query('SELECT id, email, phone_number, created_at FROM users WHERE id = $1', [req.user.id]);
+  res.json({ user: result.rows[0] });
+});
+
+app.post('/telegram/contact', botInternalRequired, async (req, res) => {
+  const phoneNumber = normalizePhone(req.body.phone_number);
+  const telegramUserId = String(req.body.telegram_user_id || '').trim();
+  const telegramChatId = String(req.body.telegram_chat_id || '').trim();
+  const username = String(req.body.username || '').trim();
+  const firstName = String(req.body.first_name || '').trim();
+
+  if (!phoneNumber || !telegramUserId || !telegramChatId) {
+    return res.status(400).json({ error: 'phone_number, telegram_user_id, and telegram_chat_id are required' });
+  }
+
+  const userResult = await query(
+    `INSERT INTO users (phone_number)
+     VALUES ($1)
+     ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
+     RETURNING id, email, phone_number, created_at`,
+    [phoneNumber],
+  );
+  const user = userResult.rows[0];
+  await seedDefaultCategories(user.id);
+
+  await query(
+    `INSERT INTO telegram_accounts (user_id, telegram_user_id, telegram_chat_id, phone_number, username, first_name)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (telegram_user_id)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       telegram_chat_id = EXCLUDED.telegram_chat_id,
+       phone_number = EXCLUDED.phone_number,
+       username = EXCLUDED.username,
+       first_name = EXCLUDED.first_name,
+       linked_at = NOW()`,
+    [user.id, telegramUserId, telegramChatId, phoneNumber, username, firstName],
+  );
+
+  const code = await createOtp(phoneNumber);
+  res.status(201).json({ user, otp: code, expires_in_seconds: 600 });
 });
 
 app.get('/categories', authRequired, async (req, res) => {
@@ -341,6 +534,13 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'internal server error' });
 });
 
-app.listen(port, () => {
-  console.log(`Budgetin API listening on ${port}`);
-});
+ensureDatabaseSchema()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Budgetin API listening on ${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Failed to prepare database schema:', error);
+    process.exit(1);
+  });

@@ -4,6 +4,7 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const email = process.env.BOT_USER_EMAIL || 'telegram@budgetin.local';
 const password = process.env.BOT_USER_PASSWORD || 'telegram_password';
+const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 
 let offset = 0;
 let jwtToken = '';
@@ -25,6 +26,7 @@ async function poll() {
       const updates = await telegram('getUpdates', { timeout: 25, offset });
       for (const update of updates.result || []) {
         offset = update.update_id + 1;
+        if (update.message?.contact) await handleContact(update.message);
         if (update.message?.text) await handleMessage(update.message);
       }
     } catch (error) {
@@ -43,11 +45,19 @@ async function handleMessage(message) {
       chatId,
       [
         'Budgetin siap.',
+        'Untuk register/login web, share nomor Telegram kamu dulu.',
         'Tambah pengeluaran: /add 50000 food makan siang',
         'Tambah pemasukan: /income 250000 salary freelance',
         'Cek ringkasan: /summary',
         'Export CSV: /export atau /export transport 2026-04',
       ].join('\n'),
+      {
+        reply_markup: {
+          keyboard: [[{ text: 'Share Phone Number', request_contact: true }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
+      },
     );
   }
 
@@ -77,6 +87,46 @@ async function handleMessage(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
     return sendMessage(chatId, `Tersimpan: ${parsed.type} ${parsed.amount} ${parsed.category}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function handleContact(message) {
+  const contact = message.contact;
+  const chatId = message.chat.id;
+
+  if (contact.user_id && contact.user_id !== message.from.id) {
+    return sendMessage(chatId, 'Kirim nomor Telegram milik kamu sendiri untuk menghubungkan akun.');
+  }
+
+  try {
+    const response = await fetch(`${backendUrl}/telegram/contact`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        phone_number: contact.phone_number,
+        telegram_user_id: String(message.from.id),
+        telegram_chat_id: String(chatId),
+        username: message.from.username || '',
+        first_name: message.from.first_name || '',
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal menghubungkan akun');
+
+    return sendMessage(
+      chatId,
+      [
+        'Nomor Telegram sudah terhubung.',
+        `Kode OTP Budgetin kamu: ${body.otp}`,
+        'Kode berlaku 10 menit. Masukkan kode ini di halaman login web.',
+      ].join('\n'),
+      { reply_markup: { remove_keyboard: true } },
+    );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -219,8 +269,8 @@ async function telegram(method, payload) {
   return response.json();
 }
 
-async function sendMessage(chatId, text) {
-  return telegram('sendMessage', { chat_id: chatId, text });
+async function sendMessage(chatId, text, extra = {}) {
+  return telegram('sendMessage', { chat_id: chatId, text, ...extra });
 }
 
 function wait(ms) {
