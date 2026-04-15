@@ -11,6 +11,21 @@ const app = express();
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'development_secret';
 
+const CATEGORY_DEFINITIONS = {
+  expense: [
+    { code: 'food_drink', label: 'Makan & Minum', aliases: ['food', 'drink', 'makan', 'minum', 'makan & minum', 'makan minum', 'kopi', 'snack'] },
+    { code: 'transport', label: 'Transportasi', aliases: ['kendaraan', 'transport', 'transportasi', 'transpot', 'bensin', 'parkir', 'tol', 'ojek'] },
+    { code: 'other_expense', label: 'Lain-Lain', aliases: ['lain', 'lain-lain', 'lain lain', 'lainnya', 'other', 'misc'] },
+  ],
+  income: [
+    { code: 'salary', label: 'Gaji Pokok', aliases: ['gaji', 'salary', 'gaji pokok'] },
+    { code: 'freelance', label: 'Freelance', aliases: ['freelance', 'project', 'sampingan'] },
+  ],
+};
+
+const CATEGORY_OPTIONS = Object.values(CATEGORY_DEFINITIONS).flat();
+const CATEGORY_LABELS = Object.fromEntries(CATEGORY_OPTIONS.map((category) => [category.code, category.label]));
+
 app.use(helmet());
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*' }));
 app.use(express.json());
@@ -40,14 +55,30 @@ function authRequired(req, res, next) {
   }
 }
 
-function normalizeCategory(category) {
-  return String(category || '').trim().toLowerCase();
+function normalizeInput(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function categoryLabel(code) {
+  return CATEGORY_LABELS[code] || code;
+}
+
+function normalizeCategory(type, category) {
+  const normalized = normalizeInput(category).replace(/_/g, ' ');
+  const available = CATEGORY_DEFINITIONS[type] || [];
+  const exact = available.find((item) => item.code === normalized.replace(/\s+/g, '_'));
+  if (exact) return exact.code;
+
+  const matched = available.find((item) => item.aliases.includes(normalized));
+  if (matched) return matched.code;
+
+  return type === 'expense' ? 'other_expense' : null;
 }
 
 function validateTransaction(body) {
   const type = body.type === 'income' ? 'income' : body.type === 'expense' ? 'expense' : null;
   const amount = Number(body.amount);
-  const category = normalizeCategory(body.category);
+  const category = type ? normalizeCategory(type, body.category) : null;
   const note = String(body.note || '').trim();
 
   if (!type) return { error: 'type must be income or expense' };
@@ -55,6 +86,66 @@ function validateTransaction(body) {
   if (!category) return { error: 'category is required' };
 
   return { value: { type, amount, category, note } };
+}
+
+function buildTransactionFilters(userId, queryParams) {
+  const params = [userId];
+  const filters = ['user_id = $1'];
+  const type = queryParams.type === 'income' || queryParams.type === 'expense' ? queryParams.type : '';
+  const category = normalizeInput(queryParams.category).replace(/\s+/g, '_');
+  const month = normalizeInput(queryParams.month);
+
+  if (type) {
+    params.push(type);
+    filters.push(`type = $${params.length}`);
+  }
+
+  if (category && CATEGORY_LABELS[category]) {
+    params.push(category);
+    filters.push(`category = $${params.length}`);
+  }
+
+  if (/^\d{4}-\d{2}$/.test(month)) {
+    params.push(`${month}-01`);
+    filters.push(`created_at >= $${params.length}::date`);
+    params.push(`${month}-01`);
+    filters.push(`created_at < ($${params.length}::date + INTERVAL '1 month')`);
+  }
+
+  return { where: filters.join(' AND '), params };
+}
+
+function transactionOrder(sort) {
+  switch (sort) {
+    case 'oldest':
+      return 'created_at ASC';
+    case 'amount_desc':
+      return 'amount DESC, created_at DESC';
+    case 'amount_asc':
+      return 'amount ASC, created_at DESC';
+    case 'newest':
+    default:
+      return 'created_at DESC';
+  }
+}
+
+function withCategoryLabels(rows) {
+  return rows.map((row) => ({
+    ...row,
+    category_label: categoryLabel(row.category),
+  }));
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function sanitizeFilenamePart(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 app.get('/health', async (_req, res) => {
@@ -103,15 +194,12 @@ app.post('/auth/login', async (req, res) => {
 });
 
 app.get('/categories', authRequired, async (req, res) => {
-  const result = await query(
-    'SELECT id, name, created_at FROM categories WHERE user_id = $1 ORDER BY name ASC',
-    [req.user.id],
-  );
-  res.json({ data: result.rows });
+  res.json({ data: CATEGORY_DEFINITIONS });
 });
 
 app.post('/categories', authRequired, async (req, res) => {
-  const name = normalizeCategory(req.body.name);
+  const type = req.body.type === 'income' ? 'income' : req.body.type === 'expense' ? 'expense' : null;
+  const name = type ? normalizeCategory(type, req.body.name) : '';
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   const result = await query(
@@ -126,15 +214,17 @@ app.post('/categories', authRequired, async (req, res) => {
 
 app.get('/transactions', authRequired, async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50), 100);
+  const { where, params } = buildTransactionFilters(req.user.id, req.query);
+  params.push(limit);
   const result = await query(
     `SELECT id, type, amount::float AS amount, category, note, created_at
      FROM transactions
-     WHERE user_id = $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [req.user.id, limit],
+     WHERE ${where}
+     ORDER BY ${transactionOrder(req.query.sort)}
+     LIMIT $${params.length}`,
+    params,
   );
-  res.json({ data: result.rows });
+  res.json({ data: withCategoryLabels(result.rows) });
 });
 
 app.post('/transactions', authRequired, async (req, res) => {
@@ -157,7 +247,7 @@ app.post('/transactions', authRequired, async (req, res) => {
   );
 
   await redis.del(`summary:${req.user.id}`).catch(() => {});
-  res.status(201).json({ data: result.rows[0] });
+  res.status(201).json({ data: withCategoryLabels(result.rows)[0] });
 });
 
 app.get('/analytics/summary', authRequired, async (req, res) => {
@@ -189,7 +279,7 @@ app.get('/analytics/summary', authRequired, async (req, res) => {
       income: totals.rows[0].income,
       expense: totals.rows[0].expense,
       balance: totals.rows[0].income - totals.rows[0].expense,
-      byCategory: byCategory.rows,
+      byCategory: withCategoryLabels(byCategory.rows),
     },
   };
 
@@ -197,8 +287,48 @@ app.get('/analytics/summary', authRequired, async (req, res) => {
   res.json(summary);
 });
 
+app.get('/exports/transactions.csv', authRequired, async (req, res) => {
+  const { where, params } = buildTransactionFilters(req.user.id, req.query);
+  const result = await query(
+    `SELECT created_at, type, category, amount::float AS amount, note
+     FROM transactions
+     WHERE ${where}
+     ORDER BY created_at ASC`,
+    params,
+  );
+
+  const header = ['date', 'type', 'category', 'category_label', 'amount', 'note'];
+  const lines = [
+    header.join(','),
+    ...result.rows.map((row) =>
+      [
+        row.created_at.toISOString(),
+        row.type,
+        row.category,
+        categoryLabel(row.category),
+        row.amount,
+        row.note || '',
+      ]
+        .map(csvEscape)
+        .join(','),
+    ),
+  ];
+
+  const filenameParts = ['budgetin-transactions'];
+  const filenameType = sanitizeFilenamePart(req.query.type);
+  const filenameCategory = sanitizeFilenamePart(req.query.category);
+  const filenameMonth = sanitizeFilenamePart(req.query.month);
+  if (filenameType) filenameParts.push(filenameType);
+  if (filenameCategory) filenameParts.push(filenameCategory);
+  if (filenameMonth) filenameParts.push(filenameMonth);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filenameParts.join('-')}.csv"`);
+  res.send(lines.join('\n'));
+});
+
 async function seedDefaultCategories(userId) {
-  const categories = ['food', 'transport', 'salary', 'shopping', 'bills'];
+  const categories = CATEGORY_OPTIONS.map((category) => category.code);
   await Promise.all(
     categories.map((name) =>
       query('INSERT INTO categories (user_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, name]),

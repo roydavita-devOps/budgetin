@@ -46,12 +46,17 @@ async function handleMessage(message) {
         'Tambah pengeluaran: /add 50000 food makan siang',
         'Tambah pemasukan: /income 250000 salary freelance',
         'Cek ringkasan: /summary',
+        'Export CSV: /export atau /export transport 2026-04',
       ].join('\n'),
     );
   }
 
   if (text === '/summary') {
     return sendSummary(chatId);
+  }
+
+  if (text.startsWith('/export')) {
+    return sendExport(chatId, text);
   }
 
   const parsed = parseCommand(text);
@@ -72,6 +77,39 @@ async function handleMessage(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
     return sendMessage(chatId, `Tersimpan: ${parsed.type} ${parsed.amount} ${parsed.category}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendExport(chatId, text) {
+  try {
+    await ensureAuth();
+    const params = parseExportCommand(text);
+    const query = params.toString();
+    const response = await fetch(`${backendUrl}/exports/transactions.csv${query ? `?${query}` : ''}`, {
+      headers: { Authorization: `Bearer ${jwtToken}` },
+    });
+    const csv = await response.text();
+    if (!response.ok) throw new Error(csv || 'Gagal export transaksi');
+
+    const filenameParts = ['budgetin-export'];
+    if (params.get('type')) filenameParts.push(params.get('type'));
+    if (params.get('category')) filenameParts.push(params.get('category'));
+    if (params.get('month')) filenameParts.push(params.get('month'));
+
+    const formData = new FormData();
+    formData.append('chat_id', String(chatId));
+    formData.append('caption', 'Export transaksi Budgetin');
+    formData.append('document', new Blob([csv], { type: 'text/csv' }), `${filenameParts.join('-')}.csv`);
+
+    const telegramResponse = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+      method: 'POST',
+      body: formData,
+    });
+    const body = await telegramResponse.json();
+    if (!telegramResponse.ok || !body.ok) throw new Error(body.description || 'Telegram gagal mengirim file');
+    return body;
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -114,6 +152,39 @@ function parseCommand(text) {
     category,
     note: noteParts.join(' '),
   };
+}
+
+function parseExportCommand(text) {
+  const [, ...args] = text.trim().split(/\s+/);
+  const params = new URLSearchParams();
+  const filters = new Set(['income', 'expense']);
+  const categories = new Set(['food_drink', 'transport', 'other_expense', 'salary', 'freelance']);
+  const aliases = {
+    makan: 'food_drink',
+    minum: 'food_drink',
+    food: 'food_drink',
+    drink: 'food_drink',
+    bensin: 'transport',
+    kendaraan: 'transport',
+    gaji: 'salary',
+    salary: 'salary',
+    project: 'freelance',
+  };
+
+  for (const rawArg of args) {
+    const arg = rawArg.toLowerCase();
+    if (/^\d{4}-\d{2}$/.test(arg)) {
+      params.set('month', arg);
+    } else if (filters.has(arg)) {
+      params.set('type', arg);
+    } else if (categories.has(arg)) {
+      params.set('category', arg);
+    } else if (aliases[arg]) {
+      params.set('category', aliases[arg]);
+    }
+  }
+
+  return params;
 }
 
 async function ensureAuth() {
