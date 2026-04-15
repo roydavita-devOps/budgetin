@@ -116,6 +116,34 @@ async function findTelegramAccountByPhone(phoneNumber) {
   return result.rows[0];
 }
 
+async function findLinkedTelegramUser(telegramUserId) {
+  const result = await query(
+    `SELECT u.id, u.email, u.phone_number, u.created_at
+     FROM telegram_accounts ta
+     JOIN users u ON u.id = ta.user_id
+     WHERE ta.telegram_user_id = $1
+     LIMIT 1`,
+    [String(telegramUserId || '').trim()],
+  );
+  return result.rows[0];
+}
+
+async function requireLinkedTelegramUser(req, res) {
+  const telegramUserId = String(req.body.telegram_user_id || req.query.telegram_user_id || '').trim();
+  if (!telegramUserId) {
+    res.status(400).json({ error: 'telegram_user_id is required' });
+    return null;
+  }
+
+  const user = await findLinkedTelegramUser(telegramUserId);
+  if (!user) {
+    res.status(403).json({ error: 'Akun belum terhubung. Tekan /start lalu Share Phone Number dulu.' });
+    return null;
+  }
+
+  return user;
+}
+
 async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ALTER COLUMN email DROP NOT NULL').catch(() => {});
   await query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
@@ -178,6 +206,29 @@ function validateTransaction(body) {
   return { value: { type, amount, category, note } };
 }
 
+async function createTransactionForUser(userId, body) {
+  const parsed = validateTransaction(body);
+  if (parsed.error) return { error: parsed.error };
+
+  const { type, amount, category, note } = parsed.value;
+  await query(
+    `INSERT INTO categories (user_id, name)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, name) DO NOTHING`,
+    [userId, category],
+  );
+
+  const result = await query(
+    `INSERT INTO transactions (user_id, type, amount, category, note)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, type, amount::float AS amount, category, note, created_at`,
+    [userId, type, amount, category, note],
+  );
+
+  await redis.del(`summary:${userId}`).catch(() => {});
+  return { data: withCategoryLabels(result.rows)[0] };
+}
+
 function buildTransactionFilters(userId, queryParams) {
   const params = [userId];
   const filters = ['user_id = $1'];
@@ -236,6 +287,80 @@ function sanitizeFilenamePart(value) {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+async function getSummaryForUser(userId) {
+  const cacheKey = `summary:${userId}`;
+  const cached = await redis.get(cacheKey).catch(() => null);
+  if (cached) return JSON.parse(cached).data;
+
+  const totals = await query(
+    `SELECT
+       COALESCE(SUM(amount) FILTER (WHERE type = 'income'), 0)::float AS income,
+       COALESCE(SUM(amount) FILTER (WHERE type = 'expense'), 0)::float AS expense
+     FROM transactions
+     WHERE user_id = $1`,
+    [userId],
+  );
+
+  const byCategory = await query(
+    `SELECT category, type, SUM(amount)::float AS total
+     FROM transactions
+     WHERE user_id = $1
+     GROUP BY category, type
+     ORDER BY total DESC
+     LIMIT 10`,
+    [userId],
+  );
+
+  const summary = {
+    income: totals.rows[0].income,
+    expense: totals.rows[0].expense,
+    balance: totals.rows[0].income - totals.rows[0].expense,
+    byCategory: withCategoryLabels(byCategory.rows),
+  };
+
+  await redis.set(cacheKey, JSON.stringify({ data: summary }), { EX: 30 }).catch(() => {});
+  return summary;
+}
+
+async function buildTransactionsCsv(userId, queryParams) {
+  const { where, params } = buildTransactionFilters(userId, queryParams);
+  const result = await query(
+    `SELECT created_at, type, category, amount::float AS amount, note
+     FROM transactions
+     WHERE ${where}
+     ORDER BY created_at ASC`,
+    params,
+  );
+
+  const header = ['date', 'type', 'category', 'category_label', 'amount', 'note'];
+  return [
+    header.join(','),
+    ...result.rows.map((row) =>
+      [
+        row.created_at.toISOString(),
+        row.type,
+        row.category,
+        categoryLabel(row.category),
+        row.amount,
+        row.note || '',
+      ]
+        .map(csvEscape)
+        .join(','),
+    ),
+  ].join('\n');
+}
+
+function exportFilename(queryParams) {
+  const filenameParts = ['budgetin-transactions'];
+  const filenameType = sanitizeFilenamePart(queryParams.type);
+  const filenameCategory = sanitizeFilenamePart(queryParams.category);
+  const filenameMonth = sanitizeFilenamePart(queryParams.month);
+  if (filenameType) filenameParts.push(filenameType);
+  if (filenameCategory) filenameParts.push(filenameCategory);
+  if (filenameMonth) filenameParts.push(filenameMonth);
+  return `${filenameParts.join('-')}.csv`;
 }
 
 app.get('/health', async (_req, res) => {
@@ -386,6 +511,67 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
   res.status(201).json({ user, otp: code, expires_in_seconds: 600 });
 });
 
+app.get('/telegram/transactions', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const limit = Math.min(Number(req.query.limit || 10), 20);
+  const { where, params } = buildTransactionFilters(user.id, req.query);
+  params.push(limit);
+  const result = await query(
+    `SELECT id, type, amount::float AS amount, category, note, created_at
+     FROM transactions
+     WHERE ${where}
+     ORDER BY ${transactionOrder(req.query.sort)}
+     LIMIT $${params.length}`,
+    params,
+  );
+
+  res.json({ data: withCategoryLabels(result.rows) });
+});
+
+app.post('/telegram/transactions', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const result = await createTransactionForUser(user.id, req.body);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
+});
+
+app.delete('/telegram/transactions/:id', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const result = await query(
+    `DELETE FROM transactions
+     WHERE id = $1 AND user_id = $2
+     RETURNING id, type, amount::float AS amount, category, note, created_at`,
+    [req.params.id, user.id],
+  );
+
+  if (!result.rows[0]) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
+  await redis.del(`summary:${user.id}`).catch(() => {});
+  res.json({ data: withCategoryLabels(result.rows)[0] });
+});
+
+app.get('/telegram/summary', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  res.json({ data: await getSummaryForUser(user.id) });
+});
+
+app.get('/telegram/exports/transactions.csv', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const csv = await buildTransactionsCsv(user.id, req.query);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req.query)}"`);
+  res.send(csv);
+});
+
 app.get('/categories', authRequired, async (req, res) => {
   res.json({ data: CATEGORY_DEFINITIONS });
 });
@@ -421,103 +607,33 @@ app.get('/transactions', authRequired, async (req, res) => {
 });
 
 app.post('/transactions', authRequired, async (req, res) => {
-  const parsed = validateTransaction(req.body);
-  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const result = await createTransactionForUser(req.user.id, req.body);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
+});
 
-  const { type, amount, category, note } = parsed.value;
-  await query(
-    `INSERT INTO categories (user_id, name)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, name) DO NOTHING`,
-    [req.user.id, category],
-  );
-
+app.delete('/transactions/:id', authRequired, async (req, res) => {
   const result = await query(
-    `INSERT INTO transactions (user_id, type, amount, category, note)
-     VALUES ($1, $2, $3, $4, $5)
+    `DELETE FROM transactions
+     WHERE id = $1 AND user_id = $2
      RETURNING id, type, amount::float AS amount, category, note, created_at`,
-    [req.user.id, type, amount, category, note],
+    [req.params.id, req.user.id],
   );
 
+  if (!result.rows[0]) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
   await redis.del(`summary:${req.user.id}`).catch(() => {});
-  res.status(201).json({ data: withCategoryLabels(result.rows)[0] });
+  res.json({ data: withCategoryLabels(result.rows)[0] });
 });
 
 app.get('/analytics/summary', authRequired, async (req, res) => {
-  const cacheKey = `summary:${req.user.id}`;
-  const cached = await redis.get(cacheKey).catch(() => null);
-  if (cached) return res.json(JSON.parse(cached));
-
-  const totals = await query(
-    `SELECT
-       COALESCE(SUM(amount) FILTER (WHERE type = 'income'), 0)::float AS income,
-       COALESCE(SUM(amount) FILTER (WHERE type = 'expense'), 0)::float AS expense
-     FROM transactions
-     WHERE user_id = $1`,
-    [req.user.id],
-  );
-
-  const byCategory = await query(
-    `SELECT category, type, SUM(amount)::float AS total
-     FROM transactions
-     WHERE user_id = $1
-     GROUP BY category, type
-     ORDER BY total DESC
-     LIMIT 10`,
-    [req.user.id],
-  );
-
-  const summary = {
-    data: {
-      income: totals.rows[0].income,
-      expense: totals.rows[0].expense,
-      balance: totals.rows[0].income - totals.rows[0].expense,
-      byCategory: withCategoryLabels(byCategory.rows),
-    },
-  };
-
-  await redis.set(cacheKey, JSON.stringify(summary), { EX: 30 }).catch(() => {});
-  res.json(summary);
+  res.json({ data: await getSummaryForUser(req.user.id) });
 });
 
 app.get('/exports/transactions.csv', authRequired, async (req, res) => {
-  const { where, params } = buildTransactionFilters(req.user.id, req.query);
-  const result = await query(
-    `SELECT created_at, type, category, amount::float AS amount, note
-     FROM transactions
-     WHERE ${where}
-     ORDER BY created_at ASC`,
-    params,
-  );
-
-  const header = ['date', 'type', 'category', 'category_label', 'amount', 'note'];
-  const lines = [
-    header.join(','),
-    ...result.rows.map((row) =>
-      [
-        row.created_at.toISOString(),
-        row.type,
-        row.category,
-        categoryLabel(row.category),
-        row.amount,
-        row.note || '',
-      ]
-        .map(csvEscape)
-        .join(','),
-    ),
-  ];
-
-  const filenameParts = ['budgetin-transactions'];
-  const filenameType = sanitizeFilenamePart(req.query.type);
-  const filenameCategory = sanitizeFilenamePart(req.query.category);
-  const filenameMonth = sanitizeFilenamePart(req.query.month);
-  if (filenameType) filenameParts.push(filenameType);
-  if (filenameCategory) filenameParts.push(filenameCategory);
-  if (filenameMonth) filenameParts.push(filenameMonth);
-
+  const csv = await buildTransactionsCsv(req.user.id, req.query);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filenameParts.join('-')}.csv"`);
-  res.send(lines.join('\n'));
+  res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req.query)}"`);
+  res.send(csv);
 });
 
 async function seedDefaultCategories(userId) {

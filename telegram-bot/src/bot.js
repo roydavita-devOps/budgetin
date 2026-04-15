@@ -2,12 +2,10 @@ import 'dotenv/config';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
-const email = process.env.BOT_USER_EMAIL || 'telegram@budgetin.local';
-const password = process.env.BOT_USER_PASSWORD || 'telegram_password';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 
 let offset = 0;
-let jwtToken = '';
+const lastTransactionsByChat = new Map();
 
 if (!token) {
   console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
@@ -49,6 +47,8 @@ async function handleMessage(message) {
         'Tambah pengeluaran: /add 50000 food makan siang',
         'Tambah pemasukan: /income 250000 salary freelance',
         'Cek ringkasan: /summary',
+        'Transaksi terakhir: /last',
+        'Hapus transaksi: /delete 1',
         'Export CSV: /export atau /export transport 2026-04',
       ].join('\n'),
       {
@@ -62,11 +62,19 @@ async function handleMessage(message) {
   }
 
   if (text === '/summary') {
-    return sendSummary(chatId);
+    return sendSummary(message);
   }
 
   if (text.startsWith('/export')) {
-    return sendExport(chatId, text);
+    return sendExport(message, text);
+  }
+
+  if (text === '/last') {
+    return sendLastTransactions(message);
+  }
+
+  if (text.startsWith('/delete')) {
+    return deleteTransaction(message, text);
   }
 
   const parsed = parseCommand(text);
@@ -75,18 +83,17 @@ async function handleMessage(message) {
   }
 
   try {
-    await ensureAuth();
-    const response = await fetch(`${backendUrl}/transactions`, {
+    const response = await fetch(`${backendUrl}/telegram/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${jwtToken}`,
+        'x-bot-token': botInternalToken,
       },
-      body: JSON.stringify(parsed),
+      body: JSON.stringify({ ...parsed, telegram_user_id: String(message.from.id) }),
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
-    return sendMessage(chatId, `Tersimpan: ${parsed.type} ${parsed.amount} ${parsed.category}`);
+    return sendMessage(chatId, `Tersimpan: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -132,13 +139,14 @@ async function handleContact(message) {
   }
 }
 
-async function sendExport(chatId, text) {
+async function sendExport(message, text) {
+  const chatId = message.chat.id;
   try {
-    await ensureAuth();
     const params = parseExportCommand(text);
+    params.set('telegram_user_id', String(message.from.id));
     const query = params.toString();
-    const response = await fetch(`${backendUrl}/exports/transactions.csv${query ? `?${query}` : ''}`, {
-      headers: { Authorization: `Bearer ${jwtToken}` },
+    const response = await fetch(`${backendUrl}/telegram/exports/transactions.csv?${query}`, {
+      headers: { 'x-bot-token': botInternalToken },
     });
     const csv = await response.text();
     if (!response.ok) throw new Error(csv || 'Gagal export transaksi');
@@ -165,11 +173,70 @@ async function sendExport(chatId, text) {
   }
 }
 
-async function sendSummary(chatId) {
+async function sendLastTransactions(message) {
+  const chatId = message.chat.id;
   try {
-    await ensureAuth();
-    const response = await fetch(`${backendUrl}/analytics/summary`, {
-      headers: { Authorization: `Bearer ${jwtToken}` },
+    const params = new URLSearchParams({
+      telegram_user_id: String(message.from.id),
+      limit: '10',
+      sort: 'newest',
+    });
+    const response = await fetch(`${backendUrl}/telegram/transactions?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil transaksi');
+
+    lastTransactionsByChat.set(String(chatId), body.data);
+    if (!body.data.length) return sendMessage(chatId, 'Belum ada transaksi.');
+
+    return sendMessage(
+      chatId,
+      body.data
+        .map((item, index) => `${index + 1}. ${item.type} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
+        .join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function deleteTransaction(message, text) {
+  const chatId = message.chat.id;
+  const [, numberRaw] = text.trim().split(/\s+/);
+  const index = Number(numberRaw) - 1;
+  const cached = lastTransactionsByChat.get(String(chatId)) || [];
+  const transaction = cached[index];
+
+  if (!transaction) {
+    return sendMessage(chatId, 'Pilih nomor dari /last. Contoh: /delete 1');
+  }
+
+  try {
+    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
+    const response = await fetch(`${backendUrl}/telegram/transactions/${transaction.id}?${params.toString()}`, {
+      method: 'DELETE',
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal menghapus transaksi');
+
+    lastTransactionsByChat.set(
+      String(chatId),
+      cached.filter((item) => item.id !== transaction.id),
+    );
+    return sendMessage(chatId, `Dihapus: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendSummary(message) {
+  const chatId = message.chat.id;
+  try {
+    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
+    const response = await fetch(`${backendUrl}/telegram/summary?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal mengambil summary');
@@ -235,29 +302,6 @@ function parseExportCommand(text) {
   }
 
   return params;
-}
-
-async function ensureAuth() {
-  if (jwtToken) return;
-
-  const login = await auth('login');
-  if (login.ok) {
-    jwtToken = login.body.token;
-    return;
-  }
-
-  const register = await auth('register');
-  if (!register.ok) throw new Error(register.body.error || 'Bot auth failed');
-  jwtToken = register.body.token;
-}
-
-async function auth(mode) {
-  const response = await fetch(`${backendUrl}/auth/${mode}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  return { ok: response.ok, body: await response.json() };
 }
 
 async function telegram(method, payload) {
