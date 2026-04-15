@@ -17,6 +17,7 @@ const categories = {
 };
 
 const allCategories = [...categories.expense, ...categories.income];
+const storageKey = 'budgetin_session';
 
 function formatCurrency(value) {
   return new Intl.NumberFormat('id-ID', {
@@ -75,6 +76,7 @@ export default function Home() {
       });
       setUser(body.user);
       setToken(body.token);
+      localStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
       setAuthMessage('Login berhasil.');
     } catch (error) {
       setAuthMessage(error.message);
@@ -134,6 +136,49 @@ export default function Home() {
     setForm({ ...form, type, category: categories[type][0].code });
   }
 
+  function logout() {
+    localStorage.removeItem(storageKey);
+    setToken('');
+    setUser(null);
+    setSummary(null);
+    setTransactions([]);
+    setOtpCode('');
+    setAuthMessage('Kamu sudah logout.');
+  }
+
+  useEffect(() => {
+    const saved = localStorage.getItem(storageKey);
+    if (!saved) return;
+
+    try {
+      const session = JSON.parse(saved);
+      if (!session.token) return;
+      setToken(session.token);
+      setUser(session.user || null);
+      setAuthMessage('Session dipulihkan.');
+    } catch {
+      localStorage.removeItem(storageKey);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+
+    request('/me', { headers })
+      .then((body) => {
+        setUser(body.user);
+        localStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
+      })
+      .catch(() => {
+        localStorage.removeItem(storageKey);
+        setToken('');
+        setUser(null);
+        setSummary(null);
+        setTransactions([]);
+        setAuthMessage('Session berakhir. Silakan login ulang.');
+      });
+  }, [token]);
+
   useEffect(() => {
     loadData().catch(console.error);
   }, [token, filters.type, filters.category, filters.sort, filters.month]);
@@ -149,19 +194,27 @@ export default function Home() {
               Dashboard sederhana untuk transaksi harian, ringkasan saldo, dan input cepat via Telegram.
             </p>
           </div>
-          <div className="grid gap-2 md:min-w-[520px]">
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="+6281234567890" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
-              <button className="rounded border border-[#21745b] px-4 py-2 font-semibold text-[#21745b]" onClick={requestOtp}>Kirim OTP</button>
+          {token ? (
+            <div className="grid gap-3 md:min-w-[360px]">
+              <p className="text-sm text-[#4c5e55]">Login sebagai</p>
+              <p className="text-lg font-semibold text-[#15221c]">{user?.phone_number || 'User Budgetin'}</p>
+              <button className="rounded border border-[#b33a3a] px-4 py-2 font-semibold text-[#b33a3a]" onClick={logout}>Logout</button>
             </div>
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="Kode OTP" value={otpCode} onChange={(e) => setOtpCode(e.target.value)} />
-              <button className="rounded bg-[#21745b] px-4 py-2 font-semibold text-white" onClick={verifyOtp}>Masuk</button>
+          ) : (
+            <div className="grid gap-2 md:min-w-[520px]">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="+6281234567890" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
+                <button className="rounded border border-[#21745b] px-4 py-2 font-semibold text-[#21745b]" onClick={requestOtp}>Kirim OTP</button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input className="rounded border border-[#cbd8d1] px-3 py-2" placeholder="Kode OTP" value={otpCode} onChange={(e) => setOtpCode(e.target.value)} />
+                <button className="rounded bg-[#21745b] px-4 py-2 font-semibold text-white" onClick={verifyOtp}>Masuk</button>
+              </div>
+              <p className="text-sm text-[#4c5e55]">
+                {authMessage || 'Buka bot Telegram Budgetin, tekan /start, lalu share phone number sebelum meminta OTP.'}
+              </p>
             </div>
-            <p className="text-sm text-[#4c5e55]">
-              {authMessage || (user ? `Login sebagai ${user.phone_number}` : 'Buka bot Telegram Budgetin, tekan /start, lalu share phone number sebelum meminta OTP.')}
-            </p>
-          </div>
+          )}
         </div>
       </section>
 
