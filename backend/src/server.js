@@ -38,7 +38,11 @@ redis.on('error', (error) => console.error('Redis error:', error.message));
 redis.connect().catch((error) => console.error('Redis connect failed:', error.message));
 
 function signToken(user) {
-  return jwt.sign({ sub: user.id, email: user.email, phone_number: user.phone_number }, jwtSecret, { expiresIn: '7d' });
+  return jwt.sign(
+    { sub: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name },
+    jwtSecret,
+    { expiresIn: '7d' },
+  );
 }
 
 function authRequired(req, res, next) {
@@ -51,7 +55,7 @@ function authRequired(req, res, next) {
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    req.user = { id: payload.sub, email: payload.email, phone_number: payload.phone_number };
+    req.user = { id: payload.sub, email: payload.email, phone_number: payload.phone_number, display_name: payload.display_name };
     return next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
@@ -118,7 +122,7 @@ async function findTelegramAccountByPhone(phoneNumber) {
 
 async function findLinkedTelegramUser(telegramUserId) {
   const result = await query(
-    `SELECT u.id, u.email, u.phone_number, u.created_at
+    `SELECT u.id, u.email, u.phone_number, u.display_name, u.created_at
      FROM telegram_accounts ta
      JOIN users u ON u.id = ta.user_id
      WHERE ta.telegram_user_id = $1
@@ -148,6 +152,7 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ALTER COLUMN email DROP NOT NULL').catch(() => {});
   await query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT UNIQUE');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT');
   await query(`
     CREATE TABLE IF NOT EXISTS telegram_accounts (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -458,7 +463,7 @@ app.post('/auth/verify-otp', async (req, res) => {
     `INSERT INTO users (phone_number)
      VALUES ($1)
      ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-     RETURNING id, email, phone_number, created_at`,
+     RETURNING id, email, phone_number, display_name, created_at`,
     [phoneNumber],
   );
   const user = userResult.rows[0];
@@ -468,7 +473,7 @@ app.post('/auth/verify-otp', async (req, res) => {
 });
 
 app.get('/me', authRequired, async (req, res) => {
-  const result = await query('SELECT id, email, phone_number, created_at FROM users WHERE id = $1', [req.user.id]);
+  const result = await query('SELECT id, email, phone_number, display_name, created_at FROM users WHERE id = $1', [req.user.id]);
   res.json({ user: result.rows[0] });
 });
 
@@ -487,7 +492,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
     `INSERT INTO users (phone_number)
      VALUES ($1)
      ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-     RETURNING id, email, phone_number, created_at`,
+     RETURNING id, email, phone_number, display_name, created_at`,
     [phoneNumber],
   );
   const user = userResult.rows[0];
@@ -509,6 +514,26 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
 
   const code = await createOtp(phoneNumber);
   res.status(201).json({ user, otp: code, expires_in_seconds: 600 });
+});
+
+app.patch('/telegram/profile', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const displayName = String(req.body.display_name || '').trim().replace(/\s+/g, ' ');
+  if (displayName.length < 2 || displayName.length > 40) {
+    return res.status(400).json({ error: 'Nama dashboard harus 2-40 karakter' });
+  }
+
+  const result = await query(
+    `UPDATE users
+     SET display_name = $1
+     WHERE id = $2
+     RETURNING id, email, phone_number, display_name, created_at`,
+    [displayName, user.id],
+  );
+
+  res.json({ user: result.rows[0] });
 });
 
 app.get('/telegram/transactions', botInternalRequired, async (req, res) => {

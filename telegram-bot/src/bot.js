@@ -49,6 +49,7 @@ async function handleMessage(message) {
         'Cek ringkasan: /summary',
         'Transaksi terakhir: /last',
         'Hapus transaksi: /delete 1',
+        'Nama dashboard: /nama Roy',
         'Export CSV: /export atau /export transport 2026-04',
       ].join('\n'),
       {
@@ -77,6 +78,10 @@ async function handleMessage(message) {
     return deleteTransaction(message, text);
   }
 
+  if (text.startsWith('/nama') || text.startsWith('/setname')) {
+    return updateDisplayName(message, text);
+  }
+
   const parsed = parseCommand(text);
   if (!parsed) {
     return sendMessage(chatId, 'Format belum sesuai. Contoh: /add 50000 food makan siang');
@@ -94,6 +99,36 @@ async function handleMessage(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
     return sendMessage(chatId, `Tersimpan: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function updateDisplayName(message, text) {
+  const chatId = message.chat.id;
+  const [, ...nameParts] = text.trim().split(/\s+/);
+  const displayName = nameParts.join(' ').trim();
+
+  if (!displayName) {
+    return sendMessage(chatId, 'Tulis nama dashboard. Contoh: /nama Roy');
+  }
+
+  try {
+    const response = await fetch(`${backendUrl}/telegram/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        telegram_user_id: String(message.from.id),
+        display_name: displayName,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengubah nama dashboard');
+
+    return sendMessage(chatId, `Nama dashboard diubah menjadi ${body.user.display_name}.`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }

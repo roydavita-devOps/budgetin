@@ -40,6 +40,7 @@ export default function Home() {
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const expenseSummary = summary?.byCategory?.filter((item) => item.type === 'expense') || [];
   const incomeSummary = summary?.byCategory?.filter((item) => item.type === 'income') || [];
+  const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
 
   async function request(path, options = {}) {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -189,15 +190,20 @@ export default function Home() {
         <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.08em] text-[#21745b]">Budgetin</p>
-            <h1 className="mt-2 text-4xl font-bold text-[#15221c]">Catat uang masuk dan keluar.</h1>
+            <h1 className="mt-2 text-4xl font-bold text-[#15221c]">
+              {token ? `Dashboard milik ${dashboardOwner}` : 'Catat uang masuk dan keluar.'}
+            </h1>
             <p className="mt-3 max-w-2xl text-[#4c5e55]">
-              Dashboard sederhana untuk transaksi harian, ringkasan saldo, dan input cepat via Telegram.
+              {token
+                ? 'Transaksi pribadi, ringkasan kategori, dan export data sesuai kebutuhan.'
+                : 'Dashboard sederhana untuk transaksi harian, ringkasan saldo, dan input cepat via Telegram.'}
             </p>
           </div>
           {token ? (
             <div className="grid gap-3 md:min-w-[360px]">
               <p className="text-sm text-[#4c5e55]">Login sebagai</p>
-              <p className="text-lg font-semibold text-[#15221c]">{user?.phone_number || 'User Budgetin'}</p>
+              <p className="text-lg font-semibold text-[#15221c]">{dashboardOwner}</p>
+              {user?.display_name && <p className="text-sm text-[#4c5e55]">{user.phone_number}</p>}
               <button className="rounded border border-[#b33a3a] px-4 py-2 font-semibold text-[#b33a3a]" onClick={logout}>Logout</button>
             </div>
           ) : (
