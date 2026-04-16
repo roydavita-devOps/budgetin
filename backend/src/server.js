@@ -13,6 +13,7 @@ const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'development_secret';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
+const adminPhoneNumber = normalizePhone(process.env.ADMIN_PHONE_NUMBER || '081390195600');
 
 const CATEGORY_DEFINITIONS = {
   expense: [
@@ -39,7 +40,7 @@ redis.connect().catch((error) => console.error('Redis connect failed:', error.me
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name },
+    { sub: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name, is_admin: user.is_admin },
     jwtSecret,
     { expiresIn: '7d' },
   );
@@ -55,7 +56,13 @@ function authRequired(req, res, next) {
 
   try {
     const payload = jwt.verify(token, jwtSecret);
-    req.user = { id: payload.sub, email: payload.email, phone_number: payload.phone_number, display_name: payload.display_name };
+    req.user = {
+      id: payload.sub,
+      email: payload.email,
+      phone_number: payload.phone_number,
+      display_name: payload.display_name,
+      is_admin: payload.is_admin,
+    };
     return next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
@@ -133,7 +140,16 @@ async function findTelegramAccountByTelegramUserId(telegramUserId) {
 
 async function findLinkedTelegramUser(telegramUserId) {
   const result = await query(
-    `SELECT u.id, u.email, u.phone_number, u.display_name, u.created_at, ta.first_name
+    `SELECT
+       u.id,
+       u.email,
+       u.phone_number,
+       u.display_name,
+       u.is_admin,
+       u.created_at,
+       ta.telegram_user_id,
+       ta.telegram_chat_id,
+       ta.first_name
      FROM telegram_accounts ta
      JOIN users u ON u.id = ta.user_id
      WHERE ta.telegram_user_id = $1
@@ -141,6 +157,33 @@ async function findLinkedTelegramUser(telegramUserId) {
     [String(telegramUserId || '').trim()],
   );
   return result.rows[0];
+}
+
+async function requireAdminTelegramUser(req, res) {
+  const telegramUserId = String(req.body.admin_telegram_user_id || req.query.admin_telegram_user_id || '').trim();
+  if (!telegramUserId) {
+    res.status(400).json({ error: 'admin_telegram_user_id is required' });
+    return null;
+  }
+
+  const user = await findLinkedTelegramUser(telegramUserId);
+  if (!user || !user.is_admin) {
+    res.status(403).json({ error: 'Command ini hanya bisa dipakai admin.' });
+    return null;
+  }
+
+  return user;
+}
+
+async function findAdminTelegramAccounts() {
+  const result = await query(
+    `SELECT u.id, u.phone_number, u.display_name, ta.telegram_user_id, ta.telegram_chat_id, ta.first_name
+     FROM users u
+     JOIN telegram_accounts ta ON ta.user_id = u.id
+     WHERE u.is_admin = TRUE
+     ORDER BY ta.linked_at DESC`,
+  );
+  return result.rows;
 }
 
 async function requireLinkedTelegramUser(req, res) {
@@ -164,6 +207,7 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT UNIQUE');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE');
   await query(`
     CREATE TABLE IF NOT EXISTS telegram_accounts (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -187,6 +231,23 @@ async function ensureDatabaseSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS deletion_requests (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      request_code TEXT NOT NULL UNIQUE,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      request_type TEXT NOT NULL CHECK (request_type IN ('account', 'all_transactions')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+      requester_telegram_user_id TEXT NOT NULL,
+      requester_chat_id TEXT NOT NULL,
+      user_phone_number TEXT,
+      user_display_name TEXT,
+      admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query('UPDATE users SET is_admin = TRUE WHERE phone_number = $1', [adminPhoneNumber]);
 }
 
 function normalizeInput(value) {
@@ -368,6 +429,14 @@ async function buildTransactionsCsv(userId, queryParams) {
   ].join('\n');
 }
 
+function deletionTypeLabel(type) {
+  return type === 'account' ? 'hapus akun' : 'hapus semua transaksi';
+}
+
+function generateRequestCode() {
+  return crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
 function exportFilename(queryParams) {
   const filenameParts = ['budgetin-transactions'];
   const filenameType = sanitizeFilenamePart(queryParams.type);
@@ -396,7 +465,7 @@ app.post('/auth/register', async (req, res) => {
 
   try {
     const result = await query(
-      'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email, created_at',
+      'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email, phone_number, display_name, is_admin, created_at',
       [email, passwordHash],
     );
     const user = result.rows[0];
@@ -411,7 +480,7 @@ app.post('/auth/register', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const result = await query('SELECT id, email, password, created_at FROM users WHERE email = $1', [email]);
+  const result = await query('SELECT id, email, password, phone_number, display_name, is_admin, created_at FROM users WHERE email = $1', [email]);
   const user = result.rows[0];
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -419,7 +488,7 @@ app.post('/auth/login', async (req, res) => {
   }
 
   return res.json({
-    user: { id: user.id, email: user.email, created_at: user.created_at },
+    user: { id: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name, is_admin: user.is_admin, created_at: user.created_at },
     token: signToken(user),
   });
 });
@@ -474,7 +543,7 @@ app.post('/auth/verify-otp', async (req, res) => {
     `INSERT INTO users (phone_number)
      VALUES ($1)
      ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-     RETURNING id, email, phone_number, display_name, created_at`,
+     RETURNING id, email, phone_number, display_name, is_admin, created_at`,
     [phoneNumber],
   );
   const user = userResult.rows[0];
@@ -484,7 +553,7 @@ app.post('/auth/verify-otp', async (req, res) => {
 });
 
 app.get('/me', authRequired, async (req, res) => {
-  const result = await query('SELECT id, email, phone_number, display_name, created_at FROM users WHERE id = $1', [req.user.id]);
+  const result = await query('SELECT id, email, phone_number, display_name, is_admin, created_at FROM users WHERE id = $1', [req.user.id]);
   res.json({ user: result.rows[0] });
 });
 
@@ -535,7 +604,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
       `UPDATE users
        SET phone_number = $1
        WHERE id = $2
-       RETURNING id, email, phone_number, display_name, created_at`,
+       RETURNING id, email, phone_number, display_name, is_admin, created_at`,
       [phoneNumber, existingTelegramAccount.user_id],
     );
     user = userResult.rows[0];
@@ -544,7 +613,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
       `INSERT INTO users (phone_number)
        VALUES ($1)
        ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-       RETURNING id, email, phone_number, display_name, created_at`,
+       RETURNING id, email, phone_number, display_name, is_admin, created_at`,
       [phoneNumber],
     );
     user = userResult.rows[0];
@@ -583,7 +652,7 @@ app.patch('/telegram/profile', botInternalRequired, async (req, res) => {
     `UPDATE users
      SET display_name = $1
      WHERE id = $2
-     RETURNING id, email, phone_number, display_name, created_at`,
+     RETURNING id, email, phone_number, display_name, is_admin, created_at`,
     [displayName, user.id],
   );
 
@@ -667,6 +736,115 @@ app.get('/telegram/exports/transactions.csv', botInternalRequired, async (req, r
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req.query)}"`);
   res.send(csv);
+});
+
+app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const requestType = req.body.request_type === 'account' ? 'account' : req.body.request_type === 'all_transactions' ? 'all_transactions' : null;
+  if (!requestType) {
+    return res.status(400).json({ error: 'request_type must be account or all_transactions' });
+  }
+  if (requestType === 'account' && user.is_admin) {
+    return res.status(400).json({ error: 'Akun admin tidak bisa dihapus lewat bot.' });
+  }
+
+  const existing = await query(
+    `SELECT id, request_code, request_type, status, created_at
+     FROM deletion_requests
+     WHERE user_id = $1 AND request_type = $2 AND status = 'pending'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [user.id, requestType],
+  );
+
+  if (existing.rows[0]) {
+    return res.status(409).json({
+      error: `Permintaan ${deletionTypeLabel(requestType)} masih menunggu admin.`,
+      request: existing.rows[0],
+      admins: await findAdminTelegramAccounts(),
+    });
+  }
+
+  const requestCode = generateRequestCode();
+  const result = await query(
+    `INSERT INTO deletion_requests (
+       request_code,
+       user_id,
+       request_type,
+       requester_telegram_user_id,
+       requester_chat_id,
+       user_phone_number,
+       user_display_name
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, request_code, request_type, status, user_phone_number, user_display_name, created_at`,
+    [
+      requestCode,
+      user.id,
+      requestType,
+      user.telegram_user_id,
+      user.telegram_chat_id,
+      user.phone_number,
+      user.display_name || user.first_name || '',
+    ],
+  );
+
+  res.status(201).json({
+    request: result.rows[0],
+    admins: await findAdminTelegramAccounts(),
+  });
+});
+
+app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const action = req.body.action === 'approve' ? 'approve' : req.body.action === 'reject' ? 'reject' : null;
+  if (!action) {
+    return res.status(400).json({ error: 'action must be approve or reject' });
+  }
+
+  const requestResult = await query(
+    `SELECT *
+     FROM deletion_requests
+     WHERE request_code = $1
+     LIMIT 1`,
+    [String(req.params.code || '').trim().toUpperCase()],
+  );
+  const deletionRequest = requestResult.rows[0];
+  if (!deletionRequest) return res.status(404).json({ error: 'Permintaan hapus tidak ditemukan' });
+  if (deletionRequest.status !== 'pending') {
+    return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequest });
+  }
+
+  let deletedCount = 0;
+  if (action === 'approve' && deletionRequest.user_id) {
+    if (deletionRequest.request_type === 'account') {
+      const deleteResult = await query('DELETE FROM users WHERE id = $1 RETURNING id', [deletionRequest.user_id]);
+      deletedCount = deleteResult.rowCount;
+      await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
+    } else {
+      const deleteResult = await query('DELETE FROM transactions WHERE user_id = $1 RETURNING id', [deletionRequest.user_id]);
+      deletedCount = deleteResult.rowCount;
+      await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
+    }
+  }
+
+  const status = action === 'approve' ? 'approved' : 'rejected';
+  const updated = await query(
+    `UPDATE deletion_requests
+     SET status = $1, admin_user_id = $2, decided_at = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    [status, admin.id, deletionRequest.id],
+  );
+
+  res.json({
+    request: updated.rows[0],
+    deleted_count: deletedCount,
+  });
 });
 
 app.get('/categories', authRequired, async (req, res) => {

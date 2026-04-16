@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   password TEXT,
   phone_number TEXT UNIQUE,
   display_name TEXT,
+  is_admin BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -45,6 +46,21 @@ CREATE TABLE IF NOT EXISTS transactions (
   amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
   category TEXT NOT NULL,
   note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS deletion_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  request_code TEXT NOT NULL UNIQUE,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  request_type TEXT NOT NULL CHECK (request_type IN ('account', 'all_transactions')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  requester_telegram_user_id TEXT NOT NULL,
+  requester_chat_id TEXT NOT NULL,
+  user_phone_number TEXT,
+  user_display_name TEXT,
+  admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  decided_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

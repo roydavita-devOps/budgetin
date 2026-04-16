@@ -6,8 +6,6 @@ const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_de
 
 let offset = 0;
 const lastTransactionsByChat = new Map();
-const deleteAllConfirmations = new Map();
-const deleteAllConfirmationMs = 2 * 60 * 1000;
 
 if (!token) {
   console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
@@ -79,12 +77,24 @@ async function handleMessage(message) {
     return deleteTransaction(message, text);
   }
 
+  if (['/hapus_akun', '/delete_account'].includes(command)) {
+    return requestDeletion(message, 'account');
+  }
+
   if (['/hapus_semua', '/delete_all'].includes(command)) {
-    return requestDeleteAllConfirmation(message);
+    return requestDeletion(message, 'all_transactions');
   }
 
   if (['/konfirmasi_hapus_semua', '/confirm_delete_all'].includes(command)) {
-    return deleteAllTransactions(message);
+    return sendMessage(chatId, 'Sekarang hapus semua transaksi harus lewat persetujuan admin. Ketik /hapus_semua untuk membuat permintaan.');
+  }
+
+  if (['/admin_setujui_hapus', '/admin_approve_delete'].includes(command)) {
+    return decideDeletionRequest(message, text, 'approve');
+  }
+
+  if (['/admin_tolak_hapus', '/admin_reject_delete'].includes(command)) {
+    return decideDeletionRequest(message, text, 'reject');
   }
 
   if (['/nama', '/setname'].includes(command)) {
@@ -214,7 +224,10 @@ function sendHelpMessage(chatId) {
       'Hapus transaksi nomor 1 dari daftar /terakhir.',
       '',
       '/hapus_semua',
-      'Hapus semua transaksi. Perlu konfirmasi lagi supaya tidak salah hapus.',
+      'Ajukan permintaan hapus semua transaksi ke admin.',
+      '',
+      '/hapus_akun',
+      'Ajukan permintaan hapus akun ke admin.',
       '',
       '/nama Roy',
       'Ubah nama dashboard menjadi "Dashboard milik Roy".',
@@ -445,50 +458,108 @@ async function deleteTransaction(message, text) {
   }
 }
 
-async function requestDeleteAllConfirmation(message) {
+async function requestDeletion(message, requestType) {
   const chatId = message.chat.id;
-  deleteAllConfirmations.set(String(chatId), {
-    telegramUserId: String(message.from.id),
-    expiresAt: Date.now() + deleteAllConfirmationMs,
-  });
 
-  return sendMessage(
-    chatId,
-    [
-      'Kamu akan menghapus semua transaksi.',
-      'Data yang dihapus tidak bisa dikembalikan dari bot.',
-      '',
-      'Ketik /konfirmasi_hapus_semua dalam 2 menit untuk melanjutkan.',
-      'Abaikan pesan ini jika tidak jadi menghapus.',
-    ].join('\n'),
-  );
+  try {
+    const response = await fetch(`${backendUrl}/telegram/deletion-requests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        telegram_user_id: String(message.from.id),
+        request_type: requestType,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok && response.status !== 409) throw new Error(body.error || 'Gagal membuat permintaan hapus');
+
+    if (response.ok) {
+      await notifyAdminsAboutDeletionRequest(body.request, body.admins || []);
+    }
+
+    const pendingText = response.status === 409 ? body.error : `Permintaan ${deletionTypeLabel(requestType)} sudah dikirim ke admin.`;
+    const adminText = body.admins?.length ? 'Admin akan memproses setelah verifikasi.' : 'Belum ada admin Telegram aktif. Pastikan admin sudah /mulai dan share nomor.';
+    return sendMessage(
+      chatId,
+      [
+        pendingText,
+        `Kode request: ${body.request.request_code}`,
+        '',
+        'Data kamu belum dihapus.',
+        adminText,
+      ].join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
 }
 
-async function deleteAllTransactions(message) {
+async function notifyAdminsAboutDeletionRequest(request, admins) {
+  const uniqueChatIds = new Set(admins.map((admin) => admin.telegram_chat_id).filter(Boolean));
+  const text = [
+    'Permintaan hapus data baru.',
+    '',
+    `Kode: ${request.request_code}`,
+    `Jenis: ${deletionTypeLabel(request.request_type)}`,
+    `User: ${request.user_display_name || '-'}`,
+    `Nomor: ${request.user_phone_number || '-'}`,
+    '',
+    `Setujui: /admin_setujui_hapus ${request.request_code}`,
+    `Tolak: /admin_tolak_hapus ${request.request_code}`,
+  ].join('\n');
+
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
+}
+
+async function decideDeletionRequest(message, text, action) {
   const chatId = message.chat.id;
-  const confirmation = deleteAllConfirmations.get(String(chatId));
+  const [, codeRaw] = text.trim().split(/\s+/);
+  const code = String(codeRaw || '').trim().toUpperCase();
 
-  if (!confirmation || confirmation.telegramUserId !== String(message.from.id)) {
-    return sendMessage(chatId, 'Tidak ada permintaan hapus semua. Ketik /hapus_semua dulu.');
-  }
-
-  if (Date.now() > confirmation.expiresAt) {
-    deleteAllConfirmations.delete(String(chatId));
-    return sendMessage(chatId, 'Konfirmasi sudah kedaluwarsa. Ketik /hapus_semua lagi jika masih ingin menghapus semua transaksi.');
+  if (!code) {
+    return sendMessage(chatId, 'Tulis kode request. Contoh: /admin_setujui_hapus A1B2C3D4');
   }
 
   try {
-    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
-    const response = await fetch(`${backendUrl}/telegram/transactions?${params.toString()}`, {
-      method: 'DELETE',
-      headers: { 'x-bot-token': botInternalToken },
+    const response = await fetch(`${backendUrl}/telegram/admin/deletion-requests/${encodeURIComponent(code)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        admin_telegram_user_id: String(message.from.id),
+        action,
+      }),
     });
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Gagal menghapus semua transaksi');
+    if (!response.ok) throw new Error(body.error || 'Gagal memproses permintaan hapus');
 
-    deleteAllConfirmations.delete(String(chatId));
-    lastTransactionsByChat.delete(String(chatId));
-    return sendMessage(chatId, `Selesai. ${body.deleted_count || 0} transaksi sudah dihapus.`);
+    const approved = action === 'approve';
+    const adminText = approved
+      ? `Disetujui. ${deletionTypeLabel(body.request.request_type)} selesai diproses.`
+      : `Ditolak. Permintaan ${deletionTypeLabel(body.request.request_type)} tidak diproses.`;
+    const userText = approved
+      ? `Permintaan ${deletionTypeLabel(body.request.request_type)} kamu sudah disetujui admin dan selesai diproses.`
+      : `Permintaan ${deletionTypeLabel(body.request.request_type)} kamu ditolak admin. Data kamu tidak dihapus.`;
+
+    if (body.request.requester_chat_id && body.request.requester_chat_id !== String(chatId)) {
+      await sendMessage(body.request.requester_chat_id, userText).catch(() => null);
+    }
+
+    return sendMessage(
+      chatId,
+      [
+        adminText,
+        `Kode request: ${body.request.request_code}`,
+        `User: ${body.request.user_display_name || '-'}`,
+        `Nomor: ${body.request.user_phone_number || '-'}`,
+        `Data terhapus: ${body.deleted_count || 0}`,
+      ].join('\n'),
+    );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -736,4 +807,8 @@ function formatIdr(value) {
 
 function labelType(type) {
   return type === 'income' ? 'Pemasukan' : 'Pengeluaran';
+}
+
+function deletionTypeLabel(type) {
+  return type === 'account' ? 'hapus akun' : 'hapus semua transaksi';
 }
