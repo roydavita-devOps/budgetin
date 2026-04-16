@@ -564,6 +564,21 @@ app.post('/telegram/transactions', botInternalRequired, async (req, res) => {
   res.status(201).json(result);
 });
 
+app.delete('/telegram/transactions', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const result = await query(
+    `DELETE FROM transactions
+     WHERE user_id = $1
+     RETURNING id`,
+    [user.id],
+  );
+
+  await redis.del(`summary:${user.id}`).catch(() => {});
+  res.json({ deleted_count: result.rowCount });
+});
+
 app.delete('/telegram/transactions/:id', botInternalRequired, async (req, res) => {
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;

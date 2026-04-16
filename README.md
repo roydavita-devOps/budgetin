@@ -27,6 +27,8 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 /ringkasan
 /terakhir
 /hapus 1
+/hapus_semua
+/konfirmasi_hapus_semua
 /nama Roy
 /export makan 2026-04
 ```

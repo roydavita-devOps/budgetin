@@ -6,6 +6,8 @@ const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_de
 
 let offset = 0;
 const lastTransactionsByChat = new Map();
+const deleteAllConfirmations = new Map();
+const deleteAllConfirmationMs = 2 * 60 * 1000;
 
 if (!token) {
   console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
@@ -78,6 +80,9 @@ async function handleMessage(message) {
         '/hapus 1',
         'Hapus transaksi nomor 1 dari daftar /terakhir.',
         '',
+        '/hapus_semua',
+        'Hapus semua transaksi. Perlu konfirmasi lagi supaya tidak salah hapus.',
+        '',
         '/nama Roy',
         'Ubah nama dashboard menjadi "Dashboard milik Roy".',
         '',
@@ -111,6 +116,14 @@ async function handleMessage(message) {
 
   if (['/delete', '/hapus'].includes(command)) {
     return deleteTransaction(message, text);
+  }
+
+  if (['/hapus_semua', '/delete_all'].includes(command)) {
+    return requestDeleteAllConfirmation(message);
+  }
+
+  if (['/konfirmasi_hapus_semua', '/confirm_delete_all'].includes(command)) {
+    return deleteAllTransactions(message);
   }
 
   if (['/nama', '/setname'].includes(command)) {
@@ -296,6 +309,55 @@ async function deleteTransaction(message, text) {
       cached.filter((item) => item.id !== transaction.id),
     );
     return sendMessage(chatId, `Dihapus: ${labelType(body.data.type)} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function requestDeleteAllConfirmation(message) {
+  const chatId = message.chat.id;
+  deleteAllConfirmations.set(String(chatId), {
+    telegramUserId: String(message.from.id),
+    expiresAt: Date.now() + deleteAllConfirmationMs,
+  });
+
+  return sendMessage(
+    chatId,
+    [
+      'Kamu akan menghapus semua transaksi.',
+      'Data yang dihapus tidak bisa dikembalikan dari bot.',
+      '',
+      'Ketik /konfirmasi_hapus_semua dalam 2 menit untuk melanjutkan.',
+      'Abaikan pesan ini jika tidak jadi menghapus.',
+    ].join('\n'),
+  );
+}
+
+async function deleteAllTransactions(message) {
+  const chatId = message.chat.id;
+  const confirmation = deleteAllConfirmations.get(String(chatId));
+
+  if (!confirmation || confirmation.telegramUserId !== String(message.from.id)) {
+    return sendMessage(chatId, 'Tidak ada permintaan hapus semua. Ketik /hapus_semua dulu.');
+  }
+
+  if (Date.now() > confirmation.expiresAt) {
+    deleteAllConfirmations.delete(String(chatId));
+    return sendMessage(chatId, 'Konfirmasi sudah kedaluwarsa. Ketik /hapus_semua lagi jika masih ingin menghapus semua transaksi.');
+  }
+
+  try {
+    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
+    const response = await fetch(`${backendUrl}/telegram/transactions?${params.toString()}`, {
+      method: 'DELETE',
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal menghapus semua transaksi');
+
+    deleteAllConfirmations.delete(String(chatId));
+    lastTransactionsByChat.delete(String(chatId));
+    return sendMessage(chatId, `Selesai. ${body.deleted_count || 0} transaksi sudah dihapus.`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
