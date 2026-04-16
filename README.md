@@ -22,8 +22,13 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 
 ```text
 /mulai
-/keluar makan makan siang 50000
-/masuk freelance project logo 250000
+/makan nasi padang 18000
+/minum kopi 15000
+/bensin isi bensin motor 50000
+/transport gojek ke kantor 22000
+/lain beli kabel charger 25000
+/gaji april 7000000
+/freelance desain logo 250000
 /ringkasan
 /terakhir
 /riwayat
@@ -35,7 +40,7 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 /export makan 2026-04
 ```
 
-Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`.
+Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`. Command lama seperti `/keluar makan nasi padang 18000` dan `/masuk gaji april 7000000` tetap didukung, tetapi command kategori langsung lebih disarankan.
 
 ## API
 

@@ -59,16 +59,29 @@ async function handleMessage(message) {
         '',
         'Command yang bisa dipakai:',
         '',
-        '/keluar makan makan siang 50000',
-        'Catat uang keluar. Contoh ini berarti pengeluaran makan siang sebesar Rp50.000.',
+        'Catat pengeluaran:',
         '',
-        '/keluar bensin isi bensin motor 30000',
-        'Catat pengeluaran transportasi sebesar Rp30.000.',
+        '/makan nasi padang 18000',
+        'Catat pengeluaran makan/minum sebesar Rp18.000.',
         '',
-        '/masuk gaji gaji bulan april 7000000',
-        'Catat pemasukan dari gaji pokok sebesar Rp7.000.000.',
+        '/minum kopi 15000',
+        'Catat pengeluaran minuman sebesar Rp15.000.',
         '',
-        '/masuk freelance project logo 250000',
+        '/bensin isi bensin motor 50000',
+        'Catat pengeluaran transportasi sebesar Rp50.000.',
+        '',
+        '/transport gojek ke kantor 22000',
+        'Catat pengeluaran transportasi sebesar Rp22.000.',
+        '',
+        '/lain beli kabel charger 25000',
+        'Catat pengeluaran lain-lain sebesar Rp25.000.',
+        '',
+        'Catat pemasukan:',
+        '',
+        '/gaji april 7000000',
+        'Catat pemasukan gaji pokok sebesar Rp7.000.000.',
+        '',
+        '/freelance desain logo 250000',
         'Catat pemasukan freelance sebesar Rp250.000.',
         '',
         '/ringkasan',
@@ -439,6 +452,13 @@ async function sendSummary(message) {
 function parseCommand(text) {
   const [rawCommand, ...args] = text.split(/\s+/);
   const command = rawCommand.toLowerCase();
+  const directCommand = directCategoryCommand(command);
+  if (directCommand) {
+    const parsed = parseDirectCategoryCommand(directCommand, args);
+    if (parsed) return { value: parsed };
+    return { error: hasInvalidAmount(args) ? 'invalid_amount' : 'invalid_format' };
+  }
+
   const typeByCommand = {
     '/keluar': 'expense',
     '/expense': 'expense',
@@ -456,6 +476,39 @@ function parseCommand(text) {
   if (parsed) return { value: parsed };
 
   return { error: hasInvalidAmount(args) ? 'invalid_amount' : 'invalid_format' };
+}
+
+function directCategoryCommand(command) {
+  const commands = {
+    '/makan': { type: 'expense', category: 'makan' },
+    '/minum': { type: 'expense', category: 'minum' },
+    '/bensin': { type: 'expense', category: 'bensin' },
+    '/transport': { type: 'expense', category: 'transport' },
+    '/transportasi': { type: 'expense', category: 'transport' },
+    '/lain': { type: 'expense', category: 'lain' },
+    '/lainnya': { type: 'expense', category: 'lain' },
+    '/gaji': { type: 'income', category: 'gaji' },
+    '/freelance': { type: 'income', category: 'freelance' },
+  };
+  return commands[command] || null;
+}
+
+function parseDirectCategoryCommand(commandConfig, args) {
+  if (args.length < 2) return null;
+
+  const amountRaw = args.at(-1);
+  if (!isPlainAmount(amountRaw)) return null;
+
+  const note = args.slice(0, -1).join(' ').trim();
+  const amount = Number(amountRaw);
+  if (!note || !Number.isFinite(amount) || amount <= 0) return null;
+
+  return {
+    type: commandConfig.type,
+    amount,
+    category: commandConfig.category,
+    note,
+  };
 }
 
 function parseTrailingAmountCommand(type, args) {
@@ -521,7 +574,8 @@ function commandErrorMessage(error) {
     'Format belum sesuai.',
     '',
     'Contoh:',
-    '/keluar makan nasi padang 18000',
+    '/makan nasi padang 18000',
+    '/gaji april 7000000',
     '',
     'Catatan:',
     'Nominal ditulis paling belakang tanpa titik, koma, atau Rp.',
