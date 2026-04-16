@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS deletion_requests (
   user_phone_number TEXT,
   user_display_name TEXT,
   admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  scheduled_deletion_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ,
   decided_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

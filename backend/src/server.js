@@ -101,6 +101,10 @@ async function createOtp(phoneNumber, purpose = 'login') {
 }
 
 async function sendTelegramOtp(chatId, code) {
+  return sendTelegramMessage(chatId, `Kode OTP Budgetin kamu: ${code}\nKode berlaku 10 menit.`);
+}
+
+async function sendTelegramMessage(chatId, text) {
   if (!telegramBotToken || !chatId) return false;
 
   const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
@@ -108,7 +112,7 @@ async function sendTelegramOtp(chatId, code) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
-      text: `Kode OTP Budgetin kamu: ${code}\nKode berlaku 10 menit.`,
+      text,
     }),
   });
 
@@ -243,10 +247,14 @@ async function ensureDatabaseSchema() {
       user_phone_number TEXT,
       user_display_name TEXT,
       admin_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      scheduled_deletion_at TIMESTAMPTZ,
+      processed_at TIMESTAMPTZ,
       decided_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await query('ALTER TABLE deletion_requests ADD COLUMN IF NOT EXISTS scheduled_deletion_at TIMESTAMPTZ');
+  await query('ALTER TABLE deletion_requests ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ');
   await query('UPDATE users SET is_admin = TRUE WHERE phone_number = $1', [adminPhoneNumber]);
 }
 
@@ -435,6 +443,22 @@ function deletionTypeLabel(type) {
 
 function generateRequestCode() {
   return crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
+function deletionRequestPublicFields(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    request_code: row.request_code,
+    request_type: row.request_type,
+    status: row.status,
+    user_phone_number: row.user_phone_number,
+    user_display_name: row.user_display_name,
+    scheduled_deletion_at: row.scheduled_deletion_at,
+    processed_at: row.processed_at,
+    decided_at: row.decided_at,
+    created_at: row.created_at,
+  };
 }
 
 function exportFilename(queryParams) {
@@ -751,18 +775,27 @@ app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) =>
   }
 
   const existing = await query(
-    `SELECT id, request_code, request_type, status, created_at
+    `SELECT id, request_code, request_type, status, scheduled_deletion_at, processed_at, decided_at, created_at
      FROM deletion_requests
-     WHERE user_id = $1 AND request_type = $2 AND status = 'pending'
+     WHERE user_id = $1
+       AND request_type = $2
+       AND (
+         status = 'pending'
+         OR (status = 'approved' AND processed_at IS NULL)
+       )
      ORDER BY created_at DESC
      LIMIT 1`,
     [user.id, requestType],
   );
 
   if (existing.rows[0]) {
+    const pendingMessage =
+      existing.rows[0].status === 'approved'
+        ? `Permintaan ${deletionTypeLabel(requestType)} sudah dikonfirmasi dan sedang menunggu jadwal hapus.`
+        : `Permintaan ${deletionTypeLabel(requestType)} masih menunggu konfirmasi.`;
     return res.status(409).json({
-      error: `Permintaan ${deletionTypeLabel(requestType)} masih menunggu admin.`,
-      request: existing.rows[0],
+      error: pendingMessage,
+      request: deletionRequestPublicFields(existing.rows[0]),
       admins: await findAdminTelegramAccounts(),
     });
   }
@@ -779,7 +812,7 @@ app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) =>
        user_display_name
      )
      VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, request_code, request_type, status, user_phone_number, user_display_name, created_at`,
+     RETURNING id, request_code, request_type, status, user_phone_number, user_display_name, scheduled_deletion_at, processed_at, decided_at, created_at`,
     [
       requestCode,
       user.id,
@@ -792,9 +825,79 @@ app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) =>
   );
 
   res.status(201).json({
-    request: result.rows[0],
+    request: deletionRequestPublicFields(result.rows[0]),
     admins: await findAdminTelegramAccounts(),
   });
+});
+
+app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, res) => {
+  const user = await requireLinkedTelegramUser(req, res);
+  if (!user) return;
+
+  const action = req.body.action === 'confirm' ? 'confirm' : req.body.action === 'cancel' ? 'cancel' : null;
+  if (!action) {
+    return res.status(400).json({ error: 'action must be confirm or cancel' });
+  }
+
+  const requestResult = await query(
+    `SELECT *
+     FROM deletion_requests
+     WHERE request_code = $1
+       AND requester_telegram_user_id = $2
+     LIMIT 1`,
+    [String(req.params.code || '').trim().toUpperCase(), user.telegram_user_id],
+  );
+  const deletionRequest = requestResult.rows[0];
+  if (!deletionRequest) return res.status(404).json({ error: 'Permintaan hapus tidak ditemukan' });
+  if (deletionRequest.request_type !== 'account') {
+    return res.status(400).json({ error: 'Konfirmasi otomatis hanya untuk hapus akun.' });
+  }
+  if (deletionRequest.user_id !== user.id) {
+    return res.status(403).json({ error: 'Request ini bukan milik akun kamu.' });
+  }
+  if (deletionRequest.processed_at) {
+    return res.status(409).json({ error: 'Permintaan ini sudah selesai diproses.', request: deletionRequestPublicFields(deletionRequest) });
+  }
+
+  if (action === 'cancel') {
+    if (!['pending', 'approved'].includes(deletionRequest.status)) {
+      return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequestPublicFields(deletionRequest) });
+    }
+
+    const canceled = await query(
+      `UPDATE deletion_requests
+       SET status = 'rejected', decided_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [deletionRequest.id],
+    );
+    return res.json({ request: deletionRequestPublicFields(canceled.rows[0]) });
+  }
+
+  if (deletionRequest.status === 'approved') {
+    return res.status(409).json({
+      error: 'Permintaan hapus akun sudah dikonfirmasi.',
+      request: deletionRequestPublicFields(deletionRequest),
+    });
+  }
+  if (deletionRequest.status !== 'pending') {
+    return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequestPublicFields(deletionRequest) });
+  }
+  if (user.is_admin) {
+    return res.status(400).json({ error: 'Akun admin tidak bisa dihapus lewat bot.' });
+  }
+
+  const scheduled = await query(
+    `UPDATE deletion_requests
+     SET status = 'approved',
+       scheduled_deletion_at = NOW() + INTERVAL '24 hours',
+       decided_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [deletionRequest.id],
+  );
+
+  res.json({ request: deletionRequestPublicFields(scheduled.rows[0]) });
 });
 
 app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async (req, res) => {
@@ -920,6 +1023,37 @@ async function seedDefaultCategories(userId) {
   );
 }
 
+async function processDueAccountDeletionRequests() {
+  const due = await query(
+    `SELECT id, user_id, request_code, requester_chat_id
+     FROM deletion_requests
+     WHERE request_type = 'account'
+       AND status = 'approved'
+       AND processed_at IS NULL
+       AND scheduled_deletion_at IS NOT NULL
+       AND scheduled_deletion_at <= NOW()
+     ORDER BY scheduled_deletion_at ASC
+     LIMIT 20`,
+  );
+
+  for (const deletionRequest of due.rows) {
+    try {
+      if (deletionRequest.user_id) {
+        await query('DELETE FROM users WHERE id = $1', [deletionRequest.user_id]);
+        await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
+      }
+
+      await query('UPDATE deletion_requests SET processed_at = NOW() WHERE id = $1', [deletionRequest.id]);
+      await sendTelegramMessage(
+        deletionRequest.requester_chat_id,
+        `Akun Budgetin kamu sudah dihapus.\nKode request: ${deletionRequest.request_code}`,
+      ).catch(() => false);
+    } catch (error) {
+      console.error(`Failed to process deletion request ${deletionRequest.request_code}:`, error.message);
+    }
+  }
+}
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   res.status(500).json({ error: 'internal server error' });
@@ -930,6 +1064,10 @@ ensureDatabaseSchema()
     app.listen(port, () => {
       console.log(`Budgetin API listening on ${port}`);
     });
+    processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
+    setInterval(() => {
+      processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
+    }, 60_000);
   })
   .catch((error) => {
     console.error('Failed to prepare database schema:', error);

@@ -81,6 +81,14 @@ async function handleMessage(message) {
     return requestDeletion(message, 'account');
   }
 
+  if (['/konfirmasi_hapus_akun', '/confirm_delete_account'].includes(command)) {
+    return confirmAccountDeletion(message, text);
+  }
+
+  if (['/batal_hapus_akun', '/cancel_delete_account'].includes(command)) {
+    return cancelAccountDeletion(message, text);
+  }
+
   if (['/hapus_semua', '/delete_all'].includes(command)) {
     return requestDeletion(message, 'all_transactions');
   }
@@ -227,7 +235,10 @@ function sendHelpMessage(chatId) {
       'Ajukan permintaan hapus semua transaksi ke admin.',
       '',
       '/hapus_akun',
-      'Ajukan permintaan hapus akun ke admin.',
+      'Ajukan hapus akun otomatis. Akun dihapus 24 jam setelah konfirmasi.',
+      '',
+      '/batal_hapus_akun KODE',
+      'Batalkan hapus akun sebelum 24 jam.',
       '',
       '/nama Roy',
       'Ubah nama dashboard menjadi "Dashboard milik Roy".',
@@ -476,6 +487,10 @@ async function requestDeletion(message, requestType) {
     const body = await response.json();
     if (!response.ok && response.status !== 409) throw new Error(body.error || 'Gagal membuat permintaan hapus');
 
+    if (requestType === 'account') {
+      return sendAccountDeletionRequestMessage(chatId, body.request, response.status === 409 ? body.error : '');
+    }
+
     if (response.ok) {
       await notifyAdminsAboutDeletionRequest(body.request, body.admins || []);
     }
@@ -497,21 +512,110 @@ async function requestDeletion(message, requestType) {
   }
 }
 
+function sendAccountDeletionRequestMessage(chatId, request, existingMessage = '') {
+  const code = request.request_code;
+  const title = existingMessage || 'Permintaan hapus akun dibuat.';
+  const scheduledText = request.scheduled_deletion_at
+    ? `Akun sudah dijadwalkan terhapus otomatis pada ${formatDateTime(request.scheduled_deletion_at)}.`
+    : 'Akun belum dijadwalkan terhapus.';
+
+  return sendHtmlMessage(
+    chatId,
+    [
+      escapeHtml(title),
+      '',
+      'Kode konfirmasi:',
+      `<code>${escapeHtml(code)}</code>`,
+      '',
+      escapeHtml(scheduledText),
+      'Data kamu belum dihapus.',
+      '',
+      'Untuk melanjutkan, copy command ini:',
+      `<code>/konfirmasi_hapus_akun ${escapeHtml(code)}</code>`,
+      '',
+      'Setelah dikonfirmasi, akun akan dihapus otomatis dalam 24 jam.',
+      '',
+      'Kalau berubah pikiran, copy command ini sebelum 24 jam:',
+      `<code>/batal_hapus_akun ${escapeHtml(code)}</code>`,
+    ].join('\n'),
+  );
+}
+
+async function confirmAccountDeletion(message, text) {
+  return updateAccountDeletionRequest(message, text, 'confirm');
+}
+
+async function cancelAccountDeletion(message, text) {
+  return updateAccountDeletionRequest(message, text, 'cancel');
+}
+
+async function updateAccountDeletionRequest(message, text, action) {
+  const chatId = message.chat.id;
+  const [, codeRaw] = text.trim().split(/\s+/);
+  const code = String(codeRaw || '').trim().toUpperCase();
+
+  if (!code) {
+    const example = action === 'confirm' ? '/konfirmasi_hapus_akun A1B2C3D4' : '/batal_hapus_akun A1B2C3D4';
+    return sendMessage(chatId, `Tulis kode request. Contoh: ${example}`);
+  }
+
+  try {
+    const response = await fetch(`${backendUrl}/telegram/deletion-requests/${encodeURIComponent(code)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        telegram_user_id: String(message.from.id),
+        action,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal memproses hapus akun');
+
+    if (action === 'cancel') {
+      return sendMessage(chatId, `Hapus akun dibatalkan. Kode request: ${body.request.request_code}`);
+    }
+
+    return sendHtmlMessage(
+      chatId,
+      [
+        'Hapus akun sudah dikonfirmasi.',
+        '',
+        'Kode request:',
+        `<code>${escapeHtml(body.request.request_code)}</code>`,
+        '',
+        `Akun akan dihapus otomatis pada ${escapeHtml(formatDateTime(body.request.scheduled_deletion_at))}.`,
+        '',
+        'Kalau berubah pikiran, copy command ini sebelum waktunya:',
+        `<code>/batal_hapus_akun ${escapeHtml(body.request.request_code)}</code>`,
+      ].join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
 async function notifyAdminsAboutDeletionRequest(request, admins) {
   const uniqueChatIds = new Set(admins.map((admin) => admin.telegram_chat_id).filter(Boolean));
   const text = [
     'Permintaan hapus data baru.',
     '',
-    `Kode: ${request.request_code}`,
-    `Jenis: ${deletionTypeLabel(request.request_type)}`,
-    `User: ${request.user_display_name || '-'}`,
-    `Nomor: ${request.user_phone_number || '-'}`,
+    'Kode:',
+    `<code>${escapeHtml(request.request_code)}</code>`,
+    `Jenis: ${escapeHtml(deletionTypeLabel(request.request_type))}`,
+    `User: ${escapeHtml(request.user_display_name || '-')}`,
+    `Nomor: ${escapeHtml(request.user_phone_number || '-')}`,
     '',
-    `Setujui: /admin_setujui_hapus ${request.request_code}`,
-    `Tolak: /admin_tolak_hapus ${request.request_code}`,
+    'Setujui:',
+    `<code>/admin_setujui_hapus ${escapeHtml(request.request_code)}</code>`,
+    '',
+    'Tolak:',
+    `<code>/admin_tolak_hapus ${escapeHtml(request.request_code)}</code>`,
   ].join('\n');
 
-  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
 }
 
 async function decideDeletionRequest(message, text, action) {
@@ -793,6 +897,17 @@ async function sendMessage(chatId, text, extra = {}) {
   return telegram('sendMessage', { chat_id: chatId, text, ...extra });
 }
 
+async function sendHtmlMessage(chatId, text, extra = {}) {
+  return sendMessage(chatId, text, { parse_mode: 'HTML', ...extra });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -811,4 +926,13 @@ function labelType(type) {
 
 function deletionTypeLabel(type) {
   return type === 'account' ? 'hapus akun' : 'hapus semua transaksi';
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  return new Intl.DateTimeFormat('id-ID', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Jakarta',
+  }).format(new Date(value));
 }
