@@ -209,6 +209,7 @@ async function sendStartMessage(message) {
     'Tekan tombol Share Phone Number supaya Telegram kamu terhubung ke dashboard web.',
     '',
     'Setelah terhubung, kamu tidak perlu share nomor lagi saat mengetik /mulai.',
+    'Setelah terhubung, ketik /bantuan untuk melihat command yang tersedia.',
   ]);
 }
 
@@ -421,6 +422,8 @@ async function handleContact(message) {
         'Nomor Telegram sudah terhubung.',
         `Kode OTP Budgetin kamu: ${body.otp}`,
         'Kode berlaku 10 menit. Masukkan kode ini di halaman login web.',
+        '',
+        'Ketik /bantuan untuk melihat command yang tersedia.',
       ].join('\n'),
       { reply_markup: { remove_keyboard: true } },
     );
