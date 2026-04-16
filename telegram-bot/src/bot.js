@@ -75,7 +75,10 @@ async function handleMessage(message) {
         'Lihat total pemasukan, pengeluaran, dan saldo.',
         '',
         '/terakhir',
-        'Lihat transaksi terakhir. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
+        'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
+        '',
+        '/riwayat',
+        'Lihat riwayat transaksi per 10 data. Ketik /riwayat 2 untuk halaman berikutnya.',
         '',
         '/hapus 1',
         'Hapus transaksi nomor 1 dari daftar /terakhir.',
@@ -112,6 +115,10 @@ async function handleMessage(message) {
 
   if (['/last', '/terakhir'].includes(command)) {
     return sendLastTransactions(message);
+  }
+
+  if (['/riwayat', '/history'].includes(command)) {
+    return sendTransactionHistory(message, text);
   }
 
   if (['/delete', '/hapus'].includes(command)) {
@@ -275,9 +282,50 @@ async function sendLastTransactions(message) {
 
     return sendMessage(
       chatId,
-      body.data
-        .map((item, index) => `${index + 1}. ${labelType(item.type)} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
-        .join('\n'),
+      [
+        '10 transaksi terbaru:',
+        'Nomor di daftar ini bisa dipakai untuk /hapus.',
+        '',
+        formatTransactions(body.data, 0),
+      ].join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendTransactionHistory(message, text) {
+  const chatId = message.chat.id;
+  const page = parsePageNumber(text);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    const params = new URLSearchParams({
+      telegram_user_id: String(message.from.id),
+      limit: String(limit),
+      offset: String(offset),
+      sort: 'newest',
+    });
+    const response = await fetch(`${backendUrl}/telegram/transactions?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil riwayat transaksi');
+
+    if (!body.data.length) {
+      return sendMessage(chatId, page === 1 ? 'Belum ada transaksi.' : `Tidak ada transaksi di halaman ${page}.`);
+    }
+
+    const nextHint = body.data.length === limit ? `\n\nKetik /riwayat ${page + 1} untuk halaman berikutnya.` : '';
+    return sendMessage(
+      chatId,
+      [
+        `Riwayat transaksi halaman ${page}`,
+        `Menampilkan data ${offset + 1}-${offset + body.data.length}.`,
+        '',
+        formatTransactions(body.data, offset),
+      ].join('\n') + nextHint,
     );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
@@ -443,6 +491,19 @@ function isPlainAmount(value) {
 
 function firstCommand(text) {
   return text.trim().split(/\s+/)[0].toLowerCase();
+}
+
+function parsePageNumber(text) {
+  const [, pageRaw] = text.trim().split(/\s+/);
+  const page = Number(pageRaw || 1);
+  if (!Number.isInteger(page) || page < 1) return 1;
+  return Math.min(page, 100);
+}
+
+function formatTransactions(transactions, offset = 0) {
+  return transactions
+    .map((item, index) => `${offset + index + 1}. ${labelType(item.type)} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
+    .join('\n');
 }
 
 function parseExportCommand(text) {

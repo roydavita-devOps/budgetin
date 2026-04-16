@@ -26,6 +26,8 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 /masuk freelance project logo 250000
 /ringkasan
 /terakhir
+/riwayat
+/riwayat 2
 /hapus 1
 /hapus_semua
 /konfirmasi_hapus_semua

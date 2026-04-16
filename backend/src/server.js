@@ -541,14 +541,17 @@ app.get('/telegram/transactions', botInternalRequired, async (req, res) => {
   if (!user) return;
 
   const limit = Math.min(Number(req.query.limit || 10), 20);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
   const { where, params } = buildTransactionFilters(user.id, req.query);
   params.push(limit);
+  params.push(offset);
   const result = await query(
     `SELECT id, type, amount::float AS amount, category, note, created_at
      FROM transactions
      WHERE ${where}
      ORDER BY ${transactionOrder(req.query.sort)}
-     LIMIT $${params.length}`,
+     LIMIT $${params.length - 1}
+     OFFSET $${params.length}`,
     params,
   );
 
