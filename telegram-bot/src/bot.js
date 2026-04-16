@@ -301,12 +301,6 @@ function sendViewHelp(chatId) {
       '',
       '/hapus 1',
       'Hapus transaksi nomor 1 dari daftar /terakhir.',
-      '',
-      '/export',
-      'Download semua transaksi.',
-      '',
-      '/export makan 2026-04',
-      'Download transaksi makan untuk April 2026.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
