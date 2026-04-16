@@ -138,8 +138,8 @@ async function handleMessage(message) {
   }
 
   const parsed = parseCommand(text);
-  if (!parsed) {
-    return sendMessage(chatId, 'Format belum sesuai. Contoh: /keluar makan makan siang 50000\nKetik /bantuan untuk melihat panduan.');
+  if (parsed.error) {
+    return sendMessage(chatId, commandErrorMessage(parsed.error));
   }
 
   try {
@@ -149,7 +149,7 @@ async function handleMessage(message) {
         'Content-Type': 'application/json',
         'x-bot-token': botInternalToken,
       },
-      body: JSON.stringify({ ...parsed, telegram_user_id: String(message.from.id) }),
+      body: JSON.stringify({ ...parsed.value, telegram_user_id: String(message.from.id) }),
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
@@ -448,9 +448,14 @@ function parseCommand(text) {
   };
   const type = typeByCommand[command];
 
-  if (!type) return null;
+  if (!type) {
+    return rawCommand.startsWith('/') ? { error: 'unknown_command' } : { error: 'invalid_format' };
+  }
 
-  return parseTrailingAmountCommand(type, args) || parseLegacyAmountCommand(type, args);
+  const parsed = parseTrailingAmountCommand(type, args) || parseLegacyAmountCommand(type, args);
+  if (parsed) return { value: parsed };
+
+  return { error: hasInvalidAmount(args) ? 'invalid_amount' : 'invalid_format' };
 }
 
 function parseTrailingAmountCommand(type, args) {
@@ -487,6 +492,42 @@ function parseLegacyAmountCommand(type, args) {
 
 function isPlainAmount(value) {
   return /^[1-9]\d*$/.test(String(value || ''));
+}
+
+function hasInvalidAmount(args) {
+  return args.some((arg) => /^(rp)?\d[\d.,]*$/i.test(arg) && !isPlainAmount(arg));
+}
+
+function commandErrorMessage(error) {
+  if (error === 'unknown_command') {
+    return [
+      'Command tidak tersedia.',
+      '',
+      'Ketik /bantuan untuk melihat daftar command.',
+    ].join('\n');
+  }
+
+  if (error === 'invalid_amount') {
+    return [
+      'Nominal belum sesuai.',
+      '',
+      'Tulis nominal di bagian paling belakang tanpa titik, koma, atau Rp.',
+      'Benar: 18000',
+      'Salah: Rp18.000',
+    ].join('\n');
+  }
+
+  return [
+    'Format belum sesuai.',
+    '',
+    'Contoh:',
+    '/keluar makan nasi padang 18000',
+    '',
+    'Catatan:',
+    'Nominal ditulis paling belakang tanpa titik, koma, atau Rp.',
+    '',
+    'Ketik /bantuan untuk melihat panduan.',
+  ].join('\n');
 }
 
 function firstCommand(text) {
