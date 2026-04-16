@@ -42,80 +42,21 @@ async function handleMessage(message) {
 
   const command = firstCommand(text);
 
-  if (['/start', '/help', '/mulai', '/bantuan'].includes(command)) {
-    return sendMessage(
-      chatId,
-      [
-        'Budgetin siap membantu.',
-        '',
-        'Sebelum mulai:',
-        'Tekan tombol Share Phone Number supaya Telegram kamu terhubung ke dashboard web.',
-        '',
-        'Catatan nominal:',
-        'Tulis nominal di bagian paling belakang.',
-        'Jangan pakai titik, koma, atau Rp.',
-        'Benar: 50000',
-        'Salah: Rp50.000',
-        '',
-        'Command yang bisa dipakai:',
-        '',
-        'Catat pengeluaran:',
-        '',
-        '/makan nasi padang 18000',
-        'Catat pengeluaran makan/minum sebesar Rp18.000.',
-        '',
-        '/minum kopi 15000',
-        'Catat pengeluaran minuman sebesar Rp15.000.',
-        '',
-        '/bensin isi bensin motor 50000',
-        'Catat pengeluaran transportasi sebesar Rp50.000.',
-        '',
-        '/transport gojek ke kantor 22000',
-        'Catat pengeluaran transportasi sebesar Rp22.000.',
-        '',
-        '/lain beli kabel charger 25000',
-        'Catat pengeluaran lain-lain sebesar Rp25.000.',
-        '',
-        'Catat pemasukan:',
-        '',
-        '/gaji april 7000000',
-        'Catat pemasukan gaji pokok sebesar Rp7.000.000.',
-        '',
-        '/freelance desain logo 250000',
-        'Catat pemasukan freelance sebesar Rp250.000.',
-        '',
-        '/ringkasan',
-        'Lihat total pemasukan, pengeluaran, dan saldo.',
-        '',
-        '/terakhir',
-        'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
-        '',
-        '/riwayat',
-        'Lihat riwayat transaksi per 10 data. Ketik /riwayat 2 untuk halaman berikutnya.',
-        '',
-        '/hapus 1',
-        'Hapus transaksi nomor 1 dari daftar /terakhir.',
-        '',
-        '/hapus_semua',
-        'Hapus semua transaksi. Perlu konfirmasi lagi supaya tidak salah hapus.',
-        '',
-        '/nama Roy',
-        'Ubah nama dashboard menjadi "Dashboard milik Roy".',
-        '',
-        '/export',
-        'Download semua transaksi ke file CSV.',
-        '',
-        '/export makan 2026-04',
-        'Download transaksi makan untuk April 2026.',
-      ].join('\n'),
-      {
-        reply_markup: {
-          keyboard: [[{ text: 'Share Phone Number', request_contact: true }]],
-          resize_keyboard: true,
-          one_time_keyboard: true,
-        },
-      },
-    );
+  if (['/start', '/mulai'].includes(command)) {
+    return sendStartMessage(message);
+  }
+
+  if (['/help', '/bantuan'].includes(command)) {
+    return sendHelpMessage(chatId);
+  }
+
+  if (['/hubungkan_ulang', '/relink'].includes(command)) {
+    return requestPhoneNumber(chatId, [
+      'Kirim ulang nomor Telegram kamu.',
+      '',
+      'Ini hanya untuk mengganti nomor pada akun Telegram yang sama.',
+      'Data tidak akan dipindahkan ke akun Telegram berbeda.',
+    ]);
   }
 
   if (['/summary', '/ringkasan'].includes(command)) {
@@ -170,6 +111,135 @@ async function handleMessage(message) {
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
+}
+
+async function sendStartMessage(message) {
+  const chatId = message.chat.id;
+
+  try {
+    const account = await fetchTelegramAccount(message.from.id);
+    if (account) {
+      const name = account.display_name || account.first_name || message.from.first_name || 'teman Budgetin';
+      return sendMessage(
+        chatId,
+        [
+          `Halo ${name}, Telegram kamu sudah terhubung ke Budgetin.`,
+          '',
+          'Kamu sudah bisa langsung mencatat transaksi.',
+          '',
+          'Contoh:',
+          '/makan nasi padang 18000',
+          '/gaji april 7000000',
+          '',
+          'Ketik /bantuan untuk melihat semua command.',
+          'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
+        ].join('\n'),
+        { reply_markup: { remove_keyboard: true } },
+      );
+    }
+  } catch (error) {
+    return sendMessage(chatId, `Gagal cek akun: ${error.message}`);
+  }
+
+  return requestPhoneNumber(chatId, [
+    'Budgetin siap membantu.',
+    '',
+    'Sebelum mulai:',
+    'Tekan tombol Share Phone Number supaya Telegram kamu terhubung ke dashboard web.',
+    '',
+    'Setelah terhubung, kamu tidak perlu share nomor lagi saat mengetik /mulai.',
+  ]);
+}
+
+async function fetchTelegramAccount(telegramUserId) {
+  const params = new URLSearchParams({ telegram_user_id: String(telegramUserId) });
+  const response = await fetch(`${backendUrl}/telegram/account?${params.toString()}`, {
+    headers: { 'x-bot-token': botInternalToken },
+  });
+
+  if (response.status === 404) return null;
+
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Gagal cek akun Telegram');
+  return body.user;
+}
+
+function sendHelpMessage(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Command Budgetin:',
+      '',
+      'Catatan nominal:',
+      'Tulis nominal di bagian paling belakang.',
+      'Jangan pakai titik, koma, atau Rp.',
+      'Benar: 50000',
+      'Salah: Rp50.000',
+      '',
+      'Catat pengeluaran:',
+      '',
+      '/makan nasi padang 18000',
+      'Catat pengeluaran makan/minum sebesar Rp18.000.',
+      '',
+      '/minum kopi 15000',
+      'Catat pengeluaran minuman sebesar Rp15.000.',
+      '',
+      '/bensin isi bensin motor 50000',
+      'Catat pengeluaran transportasi sebesar Rp50.000.',
+      '',
+      '/transport gojek ke kantor 22000',
+      'Catat pengeluaran transportasi sebesar Rp22.000.',
+      '',
+      '/lain beli kabel charger 25000',
+      'Catat pengeluaran lain-lain sebesar Rp25.000.',
+      '',
+      'Catat pemasukan:',
+      '',
+      '/gaji april 7000000',
+      'Catat pemasukan gaji pokok sebesar Rp7.000.000.',
+      '',
+      '/freelance desain logo 250000',
+      'Catat pemasukan freelance sebesar Rp250.000.',
+      '',
+      '/ringkasan',
+      'Lihat total pemasukan, pengeluaran, dan saldo.',
+      '',
+      '/terakhir',
+      'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
+      '',
+      '/riwayat',
+      'Lihat riwayat transaksi per 10 data. Ketik /riwayat 2 untuk halaman berikutnya.',
+      '',
+      '/hapus 1',
+      'Hapus transaksi nomor 1 dari daftar /terakhir.',
+      '',
+      '/hapus_semua',
+      'Hapus semua transaksi. Perlu konfirmasi lagi supaya tidak salah hapus.',
+      '',
+      '/nama Roy',
+      'Ubah nama dashboard menjadi "Dashboard milik Roy".',
+      '',
+      '/export',
+      'Download semua transaksi ke file CSV.',
+      '',
+      '/export makan 2026-04',
+      'Download transaksi makan untuk April 2026.',
+      '',
+      '/hubungkan_ulang',
+      'Kirim ulang nomor Telegram jika nomor kamu berubah.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function requestPhoneNumber(chatId, lines) {
+  return sendMessage(chatId, lines.join('\n'), {
+    reply_markup: {
+      keyboard: [[{ text: 'Share Phone Number', request_contact: true }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    },
+  });
 }
 
 async function updateDisplayName(message, text) {

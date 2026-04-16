@@ -110,7 +110,7 @@ async function sendTelegramOtp(chatId, code) {
 
 async function findTelegramAccountByPhone(phoneNumber) {
   const result = await query(
-    `SELECT telegram_chat_id
+    `SELECT id, user_id, telegram_user_id, telegram_chat_id, phone_number
      FROM telegram_accounts
      WHERE phone_number = $1
      ORDER BY linked_at DESC
@@ -120,9 +120,20 @@ async function findTelegramAccountByPhone(phoneNumber) {
   return result.rows[0];
 }
 
+async function findTelegramAccountByTelegramUserId(telegramUserId) {
+  const result = await query(
+    `SELECT id, user_id, telegram_user_id, telegram_chat_id, phone_number
+     FROM telegram_accounts
+     WHERE telegram_user_id = $1
+     LIMIT 1`,
+    [String(telegramUserId || '').trim()],
+  );
+  return result.rows[0];
+}
+
 async function findLinkedTelegramUser(telegramUserId) {
   const result = await query(
-    `SELECT u.id, u.email, u.phone_number, u.display_name, u.created_at
+    `SELECT u.id, u.email, u.phone_number, u.display_name, u.created_at, ta.first_name
      FROM telegram_accounts ta
      JOIN users u ON u.id = ta.user_id
      WHERE ta.telegram_user_id = $1
@@ -477,6 +488,20 @@ app.get('/me', authRequired, async (req, res) => {
   res.json({ user: result.rows[0] });
 });
 
+app.get('/telegram/account', botInternalRequired, async (req, res) => {
+  const telegramUserId = String(req.query.telegram_user_id || '').trim();
+  if (!telegramUserId) {
+    return res.status(400).json({ error: 'telegram_user_id is required' });
+  }
+
+  const user = await findLinkedTelegramUser(telegramUserId);
+  if (!user) {
+    return res.status(404).json({ error: 'Akun Telegram belum terhubung' });
+  }
+
+  return res.json({ user });
+});
+
 app.post('/telegram/contact', botInternalRequired, async (req, res) => {
   const phoneNumber = normalizePhone(req.body.phone_number);
   const telegramUserId = String(req.body.telegram_user_id || '').trim();
@@ -488,14 +513,43 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
     return res.status(400).json({ error: 'phone_number, telegram_user_id, and telegram_chat_id are required' });
   }
 
-  const userResult = await query(
-    `INSERT INTO users (phone_number)
-     VALUES ($1)
-     ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-     RETURNING id, email, phone_number, display_name, created_at`,
-    [phoneNumber],
-  );
-  const user = userResult.rows[0];
+  const existingTelegramAccount = await findTelegramAccountByTelegramUserId(telegramUserId);
+  const existingPhoneAccount = await findTelegramAccountByPhone(phoneNumber);
+
+  if (existingPhoneAccount && existingPhoneAccount.telegram_user_id !== telegramUserId) {
+    return res.status(409).json({
+      error: 'Nomor ini sudah terhubung ke akun Telegram lain. Untuk keamanan, data tidak dipindahkan otomatis.',
+    });
+  }
+
+  let user;
+  if (existingTelegramAccount) {
+    const phoneOwner = await query('SELECT id FROM users WHERE phone_number = $1 LIMIT 1', [phoneNumber]);
+    if (phoneOwner.rows[0] && phoneOwner.rows[0].id !== existingTelegramAccount.user_id) {
+      return res.status(409).json({
+        error: 'Nomor ini sudah dipakai akun Budgetin lain. Untuk keamanan, data tidak dipindahkan otomatis.',
+      });
+    }
+
+    const userResult = await query(
+      `UPDATE users
+       SET phone_number = $1
+       WHERE id = $2
+       RETURNING id, email, phone_number, display_name, created_at`,
+      [phoneNumber, existingTelegramAccount.user_id],
+    );
+    user = userResult.rows[0];
+  } else {
+    const userResult = await query(
+      `INSERT INTO users (phone_number)
+       VALUES ($1)
+       ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
+       RETURNING id, email, phone_number, display_name, created_at`,
+      [phoneNumber],
+    );
+    user = userResult.rows[0];
+  }
+
   await seedDefaultCategories(user.id);
 
   await query(
@@ -513,7 +567,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
   );
 
   const code = await createOtp(phoneNumber);
-  res.status(201).json({ user, otp: code, expires_in_seconds: 600 });
+  res.status(existingTelegramAccount ? 200 : 201).json({ user, otp: code, expires_in_seconds: 600 });
 });
 
 app.patch('/telegram/profile', botInternalRequired, async (req, res) => {

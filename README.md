@@ -37,10 +37,11 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 /hapus_semua
 /konfirmasi_hapus_semua
 /nama Roy
+/hubungkan_ulang
 /export makan 2026-04
 ```
 
-Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`. Command lama seperti `/keluar makan nasi padang 18000` dan `/masuk gaji april 7000000` tetap didukung, tetapi command kategori langsung lebih disarankan.
+Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Kalau user yang sama mengetik `/mulai` lagi, bot tidak meminta share nomor ulang. Jika nomor Telegram berubah, gunakan `/hubungkan_ulang`; sistem hanya mengubah nomor pada akun Telegram yang sama dan tidak memindahkan data ke akun Telegram berbeda. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`. Command lama seperti `/keluar makan nasi padang 18000` dan `/masuk gaji april 7000000` tetap didukung, tetapi command kategori langsung lebih disarankan.
 
 ## API
 
