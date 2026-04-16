@@ -38,19 +38,54 @@ async function handleMessage(message) {
   const text = message.text.trim();
   const chatId = message.chat.id;
 
-  if (text === '/start' || text === '/help') {
+  const command = firstCommand(text);
+
+  if (['/start', '/help', '/mulai', '/bantuan'].includes(command)) {
     return sendMessage(
       chatId,
       [
-        'Budgetin siap.',
-        'Untuk register/login web, share nomor Telegram kamu dulu.',
-        'Tambah pengeluaran: /add 50000 food makan siang',
-        'Tambah pemasukan: /income 250000 salary freelance',
-        'Cek ringkasan: /summary',
-        'Transaksi terakhir: /last',
-        'Hapus transaksi: /delete 1',
-        'Nama dashboard: /nama Roy',
-        'Export CSV: /export atau /export transport 2026-04',
+        'Budgetin siap membantu.',
+        '',
+        'Sebelum mulai:',
+        'Tekan tombol Share Phone Number supaya Telegram kamu terhubung ke dashboard web.',
+        '',
+        'Catatan nominal:',
+        'Tulis nominal di bagian paling belakang.',
+        'Jangan pakai titik, koma, atau Rp.',
+        'Benar: 50000',
+        'Salah: Rp50.000',
+        '',
+        'Command yang bisa dipakai:',
+        '',
+        '/keluar makan makan siang 50000',
+        'Catat uang keluar. Contoh ini berarti pengeluaran makan siang sebesar Rp50.000.',
+        '',
+        '/keluar bensin isi bensin motor 30000',
+        'Catat pengeluaran transportasi sebesar Rp30.000.',
+        '',
+        '/masuk gaji gaji bulan april 7000000',
+        'Catat pemasukan dari gaji pokok sebesar Rp7.000.000.',
+        '',
+        '/masuk freelance project logo 250000',
+        'Catat pemasukan freelance sebesar Rp250.000.',
+        '',
+        '/ringkasan',
+        'Lihat total pemasukan, pengeluaran, dan saldo.',
+        '',
+        '/terakhir',
+        'Lihat transaksi terakhir. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
+        '',
+        '/hapus 1',
+        'Hapus transaksi nomor 1 dari daftar /terakhir.',
+        '',
+        '/nama Roy',
+        'Ubah nama dashboard menjadi "Dashboard milik Roy".',
+        '',
+        '/export',
+        'Download semua transaksi ke file CSV.',
+        '',
+        '/export makan 2026-04',
+        'Download transaksi makan untuk April 2026.',
       ].join('\n'),
       {
         reply_markup: {
@@ -62,29 +97,29 @@ async function handleMessage(message) {
     );
   }
 
-  if (text === '/summary') {
+  if (['/summary', '/ringkasan'].includes(command)) {
     return sendSummary(message);
   }
 
-  if (text.startsWith('/export')) {
+  if (command === '/export') {
     return sendExport(message, text);
   }
 
-  if (text === '/last') {
+  if (['/last', '/terakhir'].includes(command)) {
     return sendLastTransactions(message);
   }
 
-  if (text.startsWith('/delete')) {
+  if (['/delete', '/hapus'].includes(command)) {
     return deleteTransaction(message, text);
   }
 
-  if (text.startsWith('/nama') || text.startsWith('/setname')) {
+  if (['/nama', '/setname'].includes(command)) {
     return updateDisplayName(message, text);
   }
 
   const parsed = parseCommand(text);
   if (!parsed) {
-    return sendMessage(chatId, 'Format belum sesuai. Contoh: /add 50000 food makan siang');
+    return sendMessage(chatId, 'Format belum sesuai. Contoh: /keluar makan makan siang 50000\nKetik /bantuan untuk melihat panduan.');
   }
 
   try {
@@ -193,7 +228,7 @@ async function sendExport(message, text) {
 
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
-    formData.append('caption', 'Export transaksi Budgetin');
+    formData.append('caption', 'File export transaksi Budgetin');
     formData.append('document', new Blob([csv], { type: 'text/csv' }), `${filenameParts.join('-')}.csv`);
 
     const telegramResponse = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
@@ -228,7 +263,7 @@ async function sendLastTransactions(message) {
     return sendMessage(
       chatId,
       body.data
-        .map((item, index) => `${index + 1}. ${item.type} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
+        .map((item, index) => `${index + 1}. ${labelType(item.type)} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
         .join('\n'),
     );
   } catch (error) {
@@ -244,7 +279,7 @@ async function deleteTransaction(message, text) {
   const transaction = cached[index];
 
   if (!transaction) {
-    return sendMessage(chatId, 'Pilih nomor dari /last. Contoh: /delete 1');
+    return sendMessage(chatId, 'Pilih nomor dari /terakhir. Contoh: /hapus 1');
   }
 
   try {
@@ -260,7 +295,7 @@ async function deleteTransaction(message, text) {
       String(chatId),
       cached.filter((item) => item.id !== transaction.id),
     );
-    return sendMessage(chatId, `Dihapus: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+    return sendMessage(chatId, `Dihapus: ${labelType(body.data.type)} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -281,9 +316,9 @@ async function sendSummary(message) {
       chatId,
       [
         'Ringkasan Budgetin',
-        `Income: ${formatIdr(income)}`,
-        `Expense: ${formatIdr(expense)}`,
-        `Balance: ${formatIdr(balance)}`,
+        `Pemasukan: ${formatIdr(income)}`,
+        `Pengeluaran: ${formatIdr(expense)}`,
+        `Saldo: ${formatIdr(balance)}`,
       ].join('\n'),
     );
   } catch (error) {
@@ -292,18 +327,60 @@ async function sendSummary(message) {
 }
 
 function parseCommand(text) {
-  const [command, amountRaw, category, ...noteParts] = text.split(/\s+/);
+  const [rawCommand, ...args] = text.split(/\s+/);
+  const command = rawCommand.toLowerCase();
+  const typeByCommand = {
+    '/keluar': 'expense',
+    '/expense': 'expense',
+    '/add': 'expense',
+    '/masuk': 'income',
+    '/income': 'income',
+  };
+  const type = typeByCommand[command];
+
+  if (!type) return null;
+
+  return parseTrailingAmountCommand(type, args) || parseLegacyAmountCommand(type, args);
+}
+
+function parseTrailingAmountCommand(type, args) {
+  if (args.length < 2) return null;
+
+  const amountRaw = args.at(-1);
+  if (!isPlainAmount(amountRaw)) return null;
+
+  const category = args[0];
+  const note = args.slice(1, -1).join(' ').trim();
   const amount = Number(amountRaw);
 
-  if (!['/add', '/expense', '/income'].includes(command)) return null;
-  if (!Number.isFinite(amount) || amount <= 0 || !category) return null;
+  if (!category || !note || !Number.isFinite(amount) || amount <= 0) return null;
+
+  return { type, amount, category, note };
+}
+
+function parseLegacyAmountCommand(type, args) {
+  if (args.length < 2) return null;
+
+  const [amountRaw, category, ...noteParts] = args;
+  if (!isPlainAmount(amountRaw)) return null;
+
+  const amount = Number(amountRaw);
+  if (!category || !Number.isFinite(amount) || amount <= 0) return null;
 
   return {
-    type: command === '/income' ? 'income' : 'expense',
+    type,
     amount,
     category,
     note: noteParts.join(' '),
   };
+}
+
+function isPlainAmount(value) {
+  return /^[1-9]\d*$/.test(String(value || ''));
+}
+
+function firstCommand(text) {
+  return text.trim().split(/\s+/)[0].toLowerCase();
 }
 
 function parseExportCommand(text) {
@@ -317,10 +394,15 @@ function parseExportCommand(text) {
     food: 'food_drink',
     drink: 'food_drink',
     bensin: 'transport',
+    transportasi: 'transport',
+    transport: 'transport',
     kendaraan: 'transport',
+    lain: 'other_expense',
+    lainnya: 'other_expense',
     gaji: 'salary',
     salary: 'salary',
     project: 'freelance',
+    freelance: 'freelance',
   };
 
   for (const rawArg of args) {
@@ -362,4 +444,8 @@ function formatIdr(value) {
     currency: 'IDR',
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+function labelType(type) {
+  return type === 'income' ? 'Pemasukan' : 'Pengeluaran';
 }

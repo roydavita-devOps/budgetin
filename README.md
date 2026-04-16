@@ -21,17 +21,17 @@ Services:
 Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 
 ```text
-/start
-/add 50000 food makan siang
-/income 250000 salary freelance
-/summary
-/last
-/delete 1
+/mulai
+/keluar makan makan siang 50000
+/masuk freelance project logo 250000
+/ringkasan
+/terakhir
+/hapus 1
 /nama Roy
-/export transport 2026-04
+/export makan 2026-04
 ```
 
-Sebelum memakai command transaksi, user harus menjalankan `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama.
+Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`.
 
 ## API
 
