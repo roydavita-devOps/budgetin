@@ -76,7 +76,7 @@ async function handleMessage(message) {
     return sendSummary(message);
   }
 
-  if (command === '/export') {
+  if (['/export', '/export_semua', '/export_bulan', '/export_tanggal', '/export_range'].includes(command)) {
     return sendExport(message, text);
   }
 
@@ -435,7 +435,11 @@ async function handleContact(message) {
 async function sendExport(message, text) {
   const chatId = message.chat.id;
   try {
-    const params = parseExportCommand(text);
+    const parsed = parseExportCommand(text);
+    if (parsed.error) return sendMessage(chatId, parsed.error);
+    if (parsed.help) return sendMessage(chatId, parsed.help);
+
+    const params = parsed.params;
     params.set('telegram_user_id', String(message.from.id));
     const query = params.toString();
     const response = await fetch(`${backendUrl}/telegram/exports/transactions.csv?${query}`, {
@@ -448,6 +452,8 @@ async function sendExport(message, text) {
     if (params.get('type')) filenameParts.push(params.get('type'));
     if (params.get('category')) filenameParts.push(params.get('category'));
     if (params.get('month')) filenameParts.push(params.get('month'));
+    if (params.get('date')) filenameParts.push(params.get('date'));
+    if (params.get('date_from') || params.get('date_to')) filenameParts.push(`${params.get('date_from') || 'awal'}-to-${params.get('date_to') || 'akhir'}`);
 
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
@@ -971,7 +977,8 @@ function formatTransactions(transactions, offset = 0) {
 }
 
 function parseExportCommand(text) {
-  const [, ...args] = text.trim().split(/\s+/);
+  const [rawCommand, ...args] = text.trim().split(/\s+/);
+  const command = rawCommand.toLowerCase();
   const params = new URLSearchParams();
   const filters = new Set(['income', 'expense']);
   const categories = new Set(['food_drink', 'transport', 'other_expense', 'salary', 'freelance']);
@@ -992,10 +999,61 @@ function parseExportCommand(text) {
     freelance: 'freelance',
   };
 
+  if (command === '/export') {
+    if (!args.length) return { help: exportMenuMessage() };
+    setExportParamsFromArgs(params, args, { filters, categories, aliases });
+    return { params };
+  }
+
+  if (command === '/export_semua') {
+    setExportParamsFromArgs(params, args, { filters, categories, aliases });
+    return { params };
+  }
+
+  if (command === '/export_bulan') {
+    if (!args.length) return { help: exportMonthMenuMessage() };
+    const [month, ...rest] = args;
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return { error: 'Format bulan belum sesuai. Contoh: /export_bulan 2026-04 atau /export_bulan 2026-04 makan' };
+    }
+    params.set('month', month);
+    setExportParamsFromArgs(params, rest, { filters, categories, aliases });
+    return { params };
+  }
+
+  if (command === '/export_tanggal') {
+    const [date, ...rest] = args;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+      return { error: 'Format tanggal belum sesuai. Contoh: /export_tanggal 2026-04-16 atau /export_tanggal 2026-04-16 transport' };
+    }
+    params.set('date', date);
+    setExportParamsFromArgs(params, rest, { filters, categories, aliases });
+    return { params };
+  }
+
+  if (command === '/export_range') {
+    const [dateFrom, dateTo, ...rest] = args;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom || '') || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo || '')) {
+      return { error: 'Format range belum sesuai. Contoh: /export_range 2026-04-01 2026-04-16 atau /export_range 2026-04-01 2026-04-16 freelance' };
+    }
+    params.set('date_from', dateFrom);
+    params.set('date_to', dateTo);
+    setExportParamsFromArgs(params, rest, { filters, categories, aliases });
+    return { params };
+  }
+
+  return { help: exportMenuMessage() };
+}
+
+function setExportParamsFromArgs(params, args, options) {
+  const { filters, categories, aliases } = options;
+
   for (const rawArg of args) {
     const arg = rawArg.toLowerCase();
     if (/^\d{4}-\d{2}$/.test(arg)) {
       params.set('month', arg);
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+      if (!params.get('date')) params.set('date', arg);
     } else if (filters.has(arg)) {
       params.set('type', arg);
     } else if (categories.has(arg)) {
@@ -1004,8 +1062,58 @@ function parseExportCommand(text) {
       params.set('category', aliases[arg]);
     }
   }
+}
 
-  return params;
+function exportMenuMessage() {
+  const today = currentDateString();
+  return [
+    'Export data transaksi',
+    '',
+    'Pilih salah satu:',
+    '',
+    '/export_semua',
+    'Download semua transaksi.',
+    '',
+    '/export_bulan',
+    'Pilih bulan tahun ini.',
+    '',
+    `/export_tanggal ${today}`,
+    'Download transaksi di 1 tanggal.',
+    '',
+    `/export_range ${today.slice(0, 8)}01 ${today}`,
+    'Download transaksi dari tanggal awal sampai tanggal akhir.',
+    '',
+    'Filter kategori opsional:',
+    'Tambahkan kategori di belakang command.',
+    '',
+    'Kategori:',
+    'makan, transport, lain, gaji, freelance',
+    '',
+    'Contoh:',
+    `/export_bulan ${today.slice(0, 7)} makan`,
+    `/export_tanggal ${today} transport`,
+    `/export_range ${today.slice(0, 8)}01 ${today} freelance`,
+  ].join('\n');
+}
+
+function exportMonthMenuMessage() {
+  const year = new Intl.DateTimeFormat('en-CA', { year: 'numeric', timeZone: 'Asia/Jakarta' }).format(new Date());
+  const months = Array.from({ length: 12 }, (_, index) => {
+    const month = String(index + 1).padStart(2, '0');
+    return `/export_bulan ${year}-${month}`;
+  });
+
+  return [
+    'Pilih bulan:',
+    '',
+    ...months,
+    '',
+    'Bisa tambah kategori di belakang.',
+    '',
+    'Contoh:',
+    `/export_bulan ${year}-04 makan`,
+    `/export_bulan ${year}-04 gaji`,
+  ].join('\n');
 }
 
 async function telegram(method, payload) {
@@ -1059,4 +1167,15 @@ function formatDateTime(value) {
     timeStyle: 'short',
     timeZone: 'Asia/Jakarta',
   }).format(new Date(value));
+}
+
+function currentDateString() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }

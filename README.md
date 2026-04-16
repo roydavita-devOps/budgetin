@@ -51,6 +51,11 @@ Command cepat yang tetap bisa dipakai:
 /batal_hapus_akun KODE
 /nama Roy
 /hubungkan_ulang
+/export_semua
+/export_bulan
+/export_bulan 2026-04 makan
+/export_tanggal 2026-04-16 transport
+/export_range 2026-04-01 2026-04-16 freelance
 /export makan 2026-04
 ```
 
@@ -59,6 +64,8 @@ Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start`
 Penghapusan transaksi satuan masih bisa dilakukan user lewat `/hapus 1` setelah melihat daftar `/terakhir`. Untuk hapus akun, user memakai `/hapus_akun`, lalu bot memberi kode konfirmasi dalam format yang mudah dicopy. User bisa memilih `/konfirmasi_hapus_akun KODE` untuk hapus aman setelah 24 jam, atau `/konfirmasi_hapus_akun_sekarang KODE` jika sadar dan ingin akun dihapus permanen saat itu juga. Sebelum jadwal 24 jam berjalan, user bisa membatalkan dengan `/batal_hapus_akun KODE`.
 
 Penghapusan semua transaksi tetap lewat satu pintu admin: `/hapus_semua` membuat permintaan ke admin. Admin dengan nomor `081390195600` otomatis diberi akses admin setelah nomor itu terhubung ke bot. Admin memproses request lewat `/admin_setujui_hapus KODE` atau `/admin_tolak_hapus KODE`.
+
+Untuk export, `/export` menampilkan menu. User bisa memakai `/export_semua`, `/export_bulan`, `/export_tanggal YYYY-MM-DD`, atau `/export_range YYYY-MM-DD YYYY-MM-DD`. Kategori bisa ditambahkan di belakang command, misalnya `makan`, `transport`, `lain`, `gaji`, atau `freelance`.
 
 ## API
 

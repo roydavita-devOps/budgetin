@@ -320,6 +320,9 @@ function buildTransactionFilters(userId, queryParams) {
   const type = queryParams.type === 'income' || queryParams.type === 'expense' ? queryParams.type : '';
   const category = normalizeInput(queryParams.category).replace(/\s+/g, '_');
   const month = normalizeInput(queryParams.month);
+  const date = normalizeInput(queryParams.date);
+  const dateFrom = normalizeInput(queryParams.date_from);
+  const dateTo = normalizeInput(queryParams.date_to);
 
   if (type) {
     params.push(type);
@@ -336,6 +339,21 @@ function buildTransactionFilters(userId, queryParams) {
     filters.push(`created_at >= $${params.length}::date`);
     params.push(`${month}-01`);
     filters.push(`created_at < ($${params.length}::date + INTERVAL '1 month')`);
+  } else if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    params.push(date);
+    filters.push(`created_at >= $${params.length}::date`);
+    params.push(date);
+    filters.push(`created_at < ($${params.length}::date + INTERVAL '1 day')`);
+  } else {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      params.push(dateFrom);
+      filters.push(`created_at >= $${params.length}::date`);
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      params.push(dateTo);
+      filters.push(`created_at < ($${params.length}::date + INTERVAL '1 day')`);
+    }
   }
 
   return { where: filters.join(' AND '), params };
@@ -466,9 +484,14 @@ function exportFilename(queryParams) {
   const filenameType = sanitizeFilenamePart(queryParams.type);
   const filenameCategory = sanitizeFilenamePart(queryParams.category);
   const filenameMonth = sanitizeFilenamePart(queryParams.month);
+  const filenameDate = sanitizeFilenamePart(queryParams.date);
+  const filenameDateFrom = sanitizeFilenamePart(queryParams.date_from);
+  const filenameDateTo = sanitizeFilenamePart(queryParams.date_to);
   if (filenameType) filenameParts.push(filenameType);
   if (filenameCategory) filenameParts.push(filenameCategory);
   if (filenameMonth) filenameParts.push(filenameMonth);
+  if (filenameDate) filenameParts.push(filenameDate);
+  if (filenameDateFrom || filenameDateTo) filenameParts.push(`${filenameDateFrom || 'awal'}-to-${filenameDateTo || 'akhir'}`);
   return `${filenameParts.join('-')}.csv`;
 }
 
