@@ -48,6 +48,21 @@ async function handleMessage(message) {
     return sendHelpMessage(chatId);
   }
 
+  const account = await ensureRegistered(message);
+  if (!account) return null;
+
+  if (command === '/catat') {
+    return sendRecordHelp(chatId);
+  }
+
+  if (command === '/lihat') {
+    return sendViewHelp(chatId);
+  }
+
+  if (command === '/akun') {
+    return sendAccountHelp(chatId);
+  }
+
   if (['/hubungkan_ulang', '/relink'].includes(command)) {
     return requestPhoneNumber(chatId, [
       'Kirim ulang nomor Telegram kamu.',
@@ -135,6 +150,30 @@ async function handleMessage(message) {
   }
 }
 
+async function ensureRegistered(message) {
+  try {
+    const account = await fetchTelegramAccount(message.from.id);
+    if (account) return account;
+
+    await sendUnregisteredMessage(message.chat.id);
+    return null;
+  } catch (error) {
+    await sendMessage(message.chat.id, `Gagal cek akun: ${error.message}`);
+    return null;
+  }
+}
+
+function sendUnregisteredMessage(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'User belum terdaftar.',
+      '',
+      'Ketik /mulai lalu tekan Share Phone Number untuk menghubungkan Telegram kamu ke Budgetin.',
+    ].join('\n'),
+  );
+}
+
 async function sendStartMessage(message) {
   const chatId = message.chat.id;
 
@@ -190,71 +229,127 @@ function sendHelpMessage(chatId) {
   return sendMessage(
     chatId,
     [
-      'Command Budgetin:',
+      'Budgetin siap.',
       '',
-      'Catatan nominal:',
-      'Tulis nominal di bagian paling belakang.',
-      'Jangan pakai titik, koma, atau Rp.',
+      'Pilih yang kamu butuhkan:',
+      '',
+      '/catat',
+      'Untuk catat pengeluaran atau pemasukan.',
+      '',
+      '/lihat',
+      'Untuk lihat ringkasan dan riwayat transaksi.',
+      '',
+      '/export',
+      'Untuk download data transaksi.',
+      '',
+      '/akun',
+      'Untuk ubah nama, hubungkan nomor, atau hapus akun.',
+      '',
+      'Catatan penting:',
+      'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
+      'Contoh benar: /makan nasi padang 18000',
+      '',
+      'Jika belum terdaftar, ketik /mulai lalu tekan Share Phone Number.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendRecordHelp(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Mau catat apa?',
+      '',
+      'Pengeluaran:',
+      '/makan nasi padang 18000',
+      '/minum kopi 15000',
+      '/bensin isi bensin motor 50000',
+      '/transport gojek ke kantor 22000',
+      '/lain beli kabel charger 25000',
+      '',
+      'Pemasukan:',
+      '/gaji april 7000000',
+      '/freelance desain logo 250000',
+      '',
+      'Catatan:',
+      'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
       'Benar: 50000',
       'Salah: Rp50.000',
-      '',
-      'Catat pengeluaran:',
-      '',
-      '/makan nasi padang 18000',
-      'Catat pengeluaran makan/minum sebesar Rp18.000.',
-      '',
-      '/minum kopi 15000',
-      'Catat pengeluaran minuman sebesar Rp15.000.',
-      '',
-      '/bensin isi bensin motor 50000',
-      'Catat pengeluaran transportasi sebesar Rp50.000.',
-      '',
-      '/transport gojek ke kantor 22000',
-      'Catat pengeluaran transportasi sebesar Rp22.000.',
-      '',
-      '/lain beli kabel charger 25000',
-      'Catat pengeluaran lain-lain sebesar Rp25.000.',
-      '',
-      'Catat pemasukan:',
-      '',
-      '/gaji april 7000000',
-      'Catat pemasukan gaji pokok sebesar Rp7.000.000.',
-      '',
-      '/freelance desain logo 250000',
-      'Catat pemasukan freelance sebesar Rp250.000.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendViewHelp(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Mau lihat apa?',
       '',
       '/ringkasan',
       'Lihat total pemasukan, pengeluaran, dan saldo.',
       '',
       '/terakhir',
-      'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk hapus transaksi.',
+      'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk /hapus.',
       '',
       '/riwayat',
-      'Lihat riwayat transaksi per 10 data. Ketik /riwayat 2 untuk halaman berikutnya.',
+      'Lihat riwayat transaksi per 10 data.',
+      '',
+      '/riwayat 2',
+      'Lihat halaman berikutnya.',
       '',
       '/hapus 1',
       'Hapus transaksi nomor 1 dari daftar /terakhir.',
+      '',
+      '/export',
+      'Download semua transaksi.',
+      '',
+      '/export makan 2026-04',
+      'Download transaksi makan untuk April 2026.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendAccountHelp(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Pengaturan akun:',
+      '',
+      '/nama Roy',
+      'Ubah nama dashboard menjadi "Dashboard milik Roy".',
+      '',
+      '/hubungkan_ulang',
+      'Kirim ulang nomor Telegram jika nomor kamu berubah.',
       '',
       '/hapus_semua',
       'Ajukan permintaan hapus semua transaksi ke admin.',
       '',
       '/hapus_akun',
-      'Ajukan hapus akun. Bot akan memberi pilihan hapus 24 jam atau hapus sekarang.',
+      'Hapus akun. Bot akan memberi pilihan hapus 24 jam atau hapus sekarang.',
       '',
       '/batal_hapus_akun KODE',
       'Batalkan hapus akun sebelum 24 jam.',
       '',
-      '/nama Roy',
-      'Ubah nama dashboard menjadi "Dashboard milik Roy".',
+      'Catatan:',
+      'Kode hapus akun akan diberikan setelah kamu mengetik /hapus_akun.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendLegacyHelpMessage(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Command cepat yang tetap bisa dipakai:',
       '',
-      '/export',
-      'Download semua transaksi ke file CSV.',
-      '',
-      '/export makan 2026-04',
-      'Download transaksi makan untuk April 2026.',
-      '',
-      '/hubungkan_ulang',
-      'Kirim ulang nomor Telegram jika nomor kamu berubah.',
+      '/makan, /minum, /bensin, /transport, /lain',
+      '/gaji, /freelance',
+      '/ringkasan, /terakhir, /riwayat',
+      '/export, /nama, /hapus, /hapus_akun',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
@@ -828,7 +923,12 @@ function commandErrorMessage(error) {
     return [
       'Command tidak tersedia.',
       '',
-      'Ketik /bantuan untuk melihat daftar command.',
+      'Ketik:',
+      '/catat untuk mencatat transaksi',
+      '/lihat untuk melihat data',
+      '/akun untuk pengaturan akun',
+      '',
+      'Atau ketik /bantuan untuk menu utama.',
     ].join('\n');
   }
 

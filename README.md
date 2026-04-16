@@ -18,10 +18,20 @@ Services:
 
 ## Telegram Bot
 
-Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
+Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command utama:
 
 ```text
 /mulai
+/bantuan
+/catat
+/lihat
+/export
+/akun
+```
+
+Command cepat yang tetap bisa dipakai:
+
+```text
 /makan nasi padang 18000
 /minum kopi 15000
 /bensin isi bensin motor 50000
@@ -44,7 +54,7 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command:
 /export makan 2026-04
 ```
 
-Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Kalau user yang sama mengetik `/mulai` lagi, bot tidak meminta share nomor ulang. Jika nomor Telegram berubah, gunakan `/hubungkan_ulang`; sistem hanya mengubah nomor pada akun Telegram yang sama dan tidak memindahkan data ke akun Telegram berbeda. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`. Command lama seperti `/keluar makan nasi padang 18000` dan `/masuk gaji april 7000000` tetap didukung, tetapi command kategori langsung lebih disarankan.
+Sebelum memakai command transaksi, user harus menjalankan `/mulai` atau `/start` dan menekan tombol **Share Phone Number**. Nomor itu dipakai untuk menghubungkan akun Telegram dengan dashboard web, sehingga transaksi dari Telegram masuk ke dashboard user yang sama. Kalau user belum terdaftar dan memakai command selain `/mulai`, bot akan menjawab `User belum terdaftar` dan mengarahkan user ke `/mulai`. Kalau user yang sama mengetik `/mulai` lagi, bot tidak meminta share nomor ulang. Jika nomor Telegram berubah, gunakan `/hubungkan_ulang`; sistem hanya mengubah nomor pada akun Telegram yang sama dan tidak memindahkan data ke akun Telegram berbeda. Untuk input nominal, tulis angka di belakang tanpa titik, koma, atau `Rp`. Command lama seperti `/keluar makan nasi padang 18000` dan `/masuk gaji april 7000000` tetap didukung, tetapi command kategori langsung lebih disarankan.
 
 Penghapusan transaksi satuan masih bisa dilakukan user lewat `/hapus 1` setelah melihat daftar `/terakhir`. Untuk hapus akun, user memakai `/hapus_akun`, lalu bot memberi kode konfirmasi dalam format yang mudah dicopy. User bisa memilih `/konfirmasi_hapus_akun KODE` untuk hapus aman setelah 24 jam, atau `/konfirmasi_hapus_akun_sekarang KODE` jika sadar dan ingin akun dihapus permanen saat itu juga. Sebelum jadwal 24 jam berjalan, user bisa membatalkan dengan `/batal_hapus_akun KODE`.
 
