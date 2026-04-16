@@ -85,6 +85,10 @@ async function handleMessage(message) {
     return confirmAccountDeletion(message, text);
   }
 
+  if (['/konfirmasi_hapus_akun_sekarang', '/confirm_delete_account_now'].includes(command)) {
+    return confirmAccountDeletionNow(message, text);
+  }
+
   if (['/batal_hapus_akun', '/cancel_delete_account'].includes(command)) {
     return cancelAccountDeletion(message, text);
   }
@@ -235,7 +239,7 @@ function sendHelpMessage(chatId) {
       'Ajukan permintaan hapus semua transaksi ke admin.',
       '',
       '/hapus_akun',
-      'Ajukan hapus akun otomatis. Akun dihapus 24 jam setelah konfirmasi.',
+      'Ajukan hapus akun. Bot akan memberi pilihan hapus 24 jam atau hapus sekarang.',
       '',
       '/batal_hapus_akun KODE',
       'Batalkan hapus akun sebelum 24 jam.',
@@ -530,10 +534,14 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
       escapeHtml(scheduledText),
       'Data kamu belum dihapus.',
       '',
-      'Untuk melanjutkan, copy command ini:',
+      'Pilihan 1 - Hapus aman:',
+      'Akun dihapus otomatis dalam 24 jam dan masih bisa dibatalkan.',
       `<code>/konfirmasi_hapus_akun ${escapeHtml(code)}</code>`,
       '',
-      'Setelah dikonfirmasi, akun akan dihapus otomatis dalam 24 jam.',
+      'Pilihan 2 - Hapus sekarang:',
+      'Akun dan seluruh data Budgetin akan dihapus permanen saat command dikirim.',
+      'Aksi ini tidak bisa dibatalkan. Pilih ini hanya jika kamu sadar dan yakin.',
+      `<code>/konfirmasi_hapus_akun_sekarang ${escapeHtml(code)}</code>`,
       '',
       'Kalau berubah pikiran, copy command ini sebelum 24 jam:',
       `<code>/batal_hapus_akun ${escapeHtml(code)}</code>`,
@@ -543,6 +551,10 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
 
 async function confirmAccountDeletion(message, text) {
   return updateAccountDeletionRequest(message, text, 'confirm');
+}
+
+async function confirmAccountDeletionNow(message, text) {
+  return updateAccountDeletionRequest(message, text, 'confirm_now');
 }
 
 async function cancelAccountDeletion(message, text) {
@@ -555,7 +567,12 @@ async function updateAccountDeletionRequest(message, text, action) {
   const code = String(codeRaw || '').trim().toUpperCase();
 
   if (!code) {
-    const example = action === 'confirm' ? '/konfirmasi_hapus_akun A1B2C3D4' : '/batal_hapus_akun A1B2C3D4';
+    const examples = {
+      confirm: '/konfirmasi_hapus_akun A1B2C3D4',
+      confirm_now: '/konfirmasi_hapus_akun_sekarang A1B2C3D4',
+      cancel: '/batal_hapus_akun A1B2C3D4',
+    };
+    const example = examples[action] || examples.confirm;
     return sendMessage(chatId, `Tulis kode request. Contoh: ${example}`);
   }
 
@@ -576,6 +593,16 @@ async function updateAccountDeletionRequest(message, text, action) {
 
     if (action === 'cancel') {
       return sendMessage(chatId, `Hapus akun dibatalkan. Kode request: ${body.request.request_code}`);
+    }
+
+    if (action === 'confirm_now') {
+      return sendMessage(
+        chatId,
+        [
+          'Akun Budgetin kamu sudah dihapus sekarang.',
+          `Kode request: ${body.request.request_code}`,
+        ].join('\n'),
+      );
     }
 
     return sendHtmlMessage(

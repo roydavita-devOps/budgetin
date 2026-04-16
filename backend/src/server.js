@@ -834,9 +834,9 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;
 
-  const action = req.body.action === 'confirm' ? 'confirm' : req.body.action === 'cancel' ? 'cancel' : null;
+  const action = ['confirm', 'confirm_now', 'cancel'].includes(req.body.action) ? req.body.action : null;
   if (!action) {
-    return res.status(400).json({ error: 'action must be confirm or cancel' });
+    return res.status(400).json({ error: 'action must be confirm, confirm_now, or cancel' });
   }
 
   const requestResult = await query(
@@ -872,6 +872,34 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
       [deletionRequest.id],
     );
     return res.json({ request: deletionRequestPublicFields(canceled.rows[0]) });
+  }
+
+  if (action === 'confirm_now') {
+    if (!['pending', 'approved'].includes(deletionRequest.status)) {
+      return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequestPublicFields(deletionRequest) });
+    }
+    if (user.is_admin) {
+      return res.status(400).json({ error: 'Akun admin tidak bisa dihapus lewat bot.' });
+    }
+
+    const processed = await query(
+      `UPDATE deletion_requests
+       SET status = 'approved',
+         scheduled_deletion_at = NOW(),
+         processed_at = NOW(),
+         decided_at = COALESCE(decided_at, NOW())
+       WHERE id = $1
+       RETURNING *`,
+      [deletionRequest.id],
+    );
+
+    await query('DELETE FROM users WHERE id = $1', [user.id]);
+    await redis.del(`summary:${user.id}`).catch(() => {});
+
+    return res.json({
+      request: deletionRequestPublicFields(processed.rows[0]),
+      deleted_now: true,
+    });
   }
 
   if (deletionRequest.status === 'approved') {
