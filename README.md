@@ -31,6 +31,8 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command utama:
 
 Bot otomatis memasang command menu Telegram, jadi user bisa tap menu `/` dan memilih `/mulai`, `/bantuan`, `/catat`, `/lihat`, `/export`, atau `/akun` tanpa mengetik manual. Gunakan `WEB_APP_URL` di `.env` untuk link dashboard yang dikirim bot saat onboarding.
 
+Saat user baru share nomor Telegram, admin akan menerima notifikasi verifikasi. User tetap bisa mencatat transaksi lewat Telegram, tetapi dashboard web lengkap, grafik, transaksi lengkap, dan export baru aktif setelah admin menjalankan `/admin_verifikasi_user TELEGRAM_ID`. Admin bisa memblokir user dengan `/admin_blokir_user TELEGRAM_ID`.
+
 Command cepat yang tetap bisa dipakai:
 
 ```text

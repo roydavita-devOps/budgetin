@@ -97,6 +97,17 @@ async function handleMessage(message) {
   }
 
   if (['/export', '/export_semua', '/export_bulan', '/export_tanggal', '/export_range'].includes(command)) {
+    if (!account.is_verified) {
+      return sendMessage(
+        chatId,
+        [
+          'Export belum aktif.',
+          '',
+          'Akun kamu sedang menunggu verifikasi admin.',
+          'Kamu tetap bisa mencatat transaksi lewat Telegram.',
+        ].join('\n'),
+      );
+    }
     return sendExport(message, text);
   }
 
@@ -148,6 +159,14 @@ async function handleMessage(message) {
     return decideDeletionRequest(message, text, 'reject');
   }
 
+  if (['/admin_verifikasi_user', '/admin_verify_user'].includes(command)) {
+    return decideUserVerification(message, text, 'verify');
+  }
+
+  if (['/admin_blokir_user', '/admin_block_user'].includes(command)) {
+    return decideUserVerification(message, text, 'block');
+  }
+
   if (['/nama', '/setname'].includes(command)) {
     return updateDisplayName(message, text);
   }
@@ -177,6 +196,17 @@ async function handleMessage(message) {
 async function ensureRegistered(message) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
+    if (account?.is_blocked) {
+      await sendMessage(
+        message.chat.id,
+        [
+          'Akun kamu diblokir.',
+          '',
+          'Hubungi admin Budgetin jika menurutmu ini keliru.',
+        ].join('\n'),
+      );
+      return null;
+    }
     if (account) return account;
 
     await sendUnregisteredMessage(message.chat.id);
@@ -204,6 +234,18 @@ async function sendStartMessage(message) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
     if (account) {
+      if (account.is_blocked) {
+        return sendMessage(
+          chatId,
+          [
+            'Akun kamu diblokir.',
+            '',
+            'Hubungi admin Budgetin jika menurutmu ini keliru.',
+          ].join('\n'),
+          { reply_markup: { remove_keyboard: true } },
+        );
+      }
+
       const name = account.display_name || account.first_name || message.from.first_name || 'teman Budgetin';
       return sendMessage(
         chatId,
@@ -219,11 +261,15 @@ async function sendStartMessage(message) {
           'Lihat menu:',
           '/bantuan',
           '',
-          'Dashboard web:',
-          webAppUrl,
-          '',
-          'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
-        ].join('\n'),
+        'Dashboard web:',
+        webAppUrl,
+        '',
+        account.is_verified
+          ? 'Dashboard lengkap sudah aktif.'
+          : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
+        '',
+        'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
+      ].join('\n'),
         { reply_markup: { remove_keyboard: true } },
       );
     }
@@ -453,6 +499,14 @@ async function handleContact(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal menghubungkan akun');
 
+    if (body.is_new_registration) {
+      await notifyAdminsAboutNewUser(body.user, body.admins || [], {
+        telegram_user_id: String(message.from.id),
+        username: message.from.username || '',
+        first_name: message.from.first_name || '',
+      });
+    }
+
     return sendMessage(
       chatId,
       [
@@ -468,6 +522,10 @@ async function handleContact(message) {
         '',
         'Dashboard web:',
         webAppUrl,
+        '',
+        body.user.is_verified
+          ? 'Dashboard lengkap sudah aktif.'
+          : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
       ].join('\n'),
       { reply_markup: { remove_keyboard: true } },
     );
@@ -886,6 +944,33 @@ async function notifyAdminsAboutDeletionRequest(request, admins) {
   await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
 }
 
+async function notifyAdminsAboutNewUser(user, admins, telegramProfile) {
+  const uniqueChatIds = new Set(admins.map((admin) => admin.telegram_chat_id).filter(Boolean));
+  if (!uniqueChatIds.size) return;
+
+  const telegramUserId = telegramProfile.telegram_user_id;
+  const username = telegramProfile.username ? `@${telegramProfile.username}` : '-';
+  const firstName = telegramProfile.first_name || '-';
+  const text = [
+    'User baru terdaftar.',
+    '',
+    `Nama: ${user.display_name || firstName}`,
+    `Username: ${username}`,
+    `Nomor: ${user.phone_number || '-'}`,
+    `Telegram ID: ${telegramUserId}`,
+    '',
+    'Status: belum diverifikasi',
+    '',
+    'Verifikasi:',
+    `/admin_verifikasi_user ${telegramUserId}`,
+    '',
+    'Blokir:',
+    `/admin_blokir_user ${telegramUserId}`,
+  ].join('\n');
+
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
+}
+
 async function decideDeletionRequest(message, text, action) {
   const chatId = message.chat.id;
   const [, codeRaw] = text.trim().split(/\s+/);
@@ -932,6 +1017,64 @@ async function decideDeletionRequest(message, text, action) {
         `Data terhapus: ${body.deleted_count || 0}`,
       ].join('\n'),
     );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function decideUserVerification(message, text, action) {
+  const chatId = message.chat.id;
+  const [, telegramUserIdRaw] = text.trim().split(/\s+/);
+  const telegramUserId = String(telegramUserIdRaw || '').trim();
+
+  if (!telegramUserId) {
+    const example = action === 'verify' ? '/admin_verifikasi_user 123456789' : '/admin_blokir_user 123456789';
+    return sendMessage(chatId, `Tulis Telegram ID user. Contoh: ${example}`);
+  }
+
+  try {
+    const response = await fetch(`${backendUrl}/telegram/admin/users/${encodeURIComponent(telegramUserId)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        admin_telegram_user_id: String(message.from.id),
+        action,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal memproses user');
+
+    if (action === 'verify') {
+      if (body.telegram.telegram_chat_id) {
+        await sendMessage(
+          body.telegram.telegram_chat_id,
+          [
+            'Akun Budgetin kamu sudah diverifikasi admin.',
+            '',
+            'Dashboard web lengkap sekarang aktif:',
+            webAppUrl,
+          ].join('\n'),
+        ).catch(() => null);
+      }
+
+      return sendMessage(chatId, `User ${body.user.phone_number || telegramUserId} sudah diverifikasi.`);
+    }
+
+    if (body.telegram.telegram_chat_id) {
+      await sendMessage(
+        body.telegram.telegram_chat_id,
+        [
+          'Akun Budgetin kamu diblokir admin.',
+          '',
+          'Hubungi admin Budgetin jika menurutmu ini keliru.',
+        ].join('\n'),
+      ).catch(() => null);
+    }
+
+    return sendMessage(chatId, `User ${body.user.phone_number || telegramUserId} sudah diblokir.`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }

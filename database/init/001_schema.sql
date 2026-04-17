@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS users (
   phone_number TEXT UNIQUE,
   display_name TEXT,
   is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+  is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+  verified_at TIMESTAMPTZ,
+  blocked_at TIMESTAMPTZ,
+  verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

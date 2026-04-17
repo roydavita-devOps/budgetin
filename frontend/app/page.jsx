@@ -41,6 +41,8 @@ export default function Home() {
   const expenseSummary = summary?.byCategory?.filter((item) => item.type === 'expense') || [];
   const incomeSummary = summary?.byCategory?.filter((item) => item.type === 'income') || [];
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
+  const isPendingVerification = Boolean(token && user && !user.is_verified && !user.is_blocked);
+  const isBlocked = Boolean(token && user?.is_blocked);
 
   async function request(path, options = {}) {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -51,7 +53,11 @@ export default function Home() {
       },
     });
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Request failed');
+    if (!response.ok) {
+      const error = new Error(body.error || 'Request failed');
+      error.code = body.code;
+      throw error;
+    }
     return body;
   }
 
@@ -86,6 +92,12 @@ export default function Home() {
 
   async function loadData() {
     if (!token) return;
+    if (!user?.is_verified || user?.is_blocked) {
+      setSummary(null);
+      setTransactions([]);
+      return;
+    }
+
     const params = new URLSearchParams({ limit: '100', sort: filters.sort });
     if (filters.type) params.set('type', filters.type);
     if (filters.category) params.set('category', filters.category);
@@ -182,7 +194,7 @@ export default function Home() {
 
   useEffect(() => {
     loadData().catch(console.error);
-  }, [token, filters.type, filters.category, filters.sort, filters.month]);
+  }, [token, user?.is_verified, user?.is_blocked, filters.type, filters.category, filters.sort, filters.month]);
 
   return (
     <main className="min-h-screen">
@@ -224,6 +236,32 @@ export default function Home() {
         </div>
       </section>
 
+      {isBlocked && (
+        <section className="mx-auto max-w-3xl px-5 py-10">
+          <div className="rounded border border-[#b33a3a] bg-white p-6">
+            <h2 className="text-2xl font-bold text-[#b33a3a]">Akun diblokir</h2>
+            <p className="mt-3 text-[#4c5e55]">
+              Akun kamu belum bisa menggunakan dashboard Budgetin. Hubungi admin jika menurutmu ini keliru.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {isPendingVerification && (
+        <section className="mx-auto max-w-3xl px-5 py-10">
+          <div className="rounded border border-[#d8e1dc] bg-white p-6">
+            <h2 className="text-2xl font-bold text-[#15221c]">Menunggu verifikasi admin</h2>
+            <p className="mt-3 text-[#4c5e55]">
+              Akun kamu sudah bisa mencatat transaksi lewat Telegram. Dashboard, grafik, transaksi lengkap, dan export CSV akan aktif setelah admin memverifikasi akun kamu.
+            </p>
+            <p className="mt-4 text-sm text-[#63736b]">
+              Ketik /bantuan di bot Telegram Budgetin untuk melihat menu yang tersedia.
+            </p>
+          </div>
+        </section>
+      )}
+
+      {(isBlocked || isPendingVerification) ? null : (
       <section className="mx-auto grid max-w-6xl gap-6 px-5 py-8 lg:grid-cols-[1fr_1.3fr]">
         <div className="rounded border border-[#d8e1dc] bg-white p-5">
           <h2 className="text-xl font-semibold">Tambah transaksi</h2>
@@ -326,6 +364,7 @@ export default function Home() {
           </div>
         </div>
       </section>
+      )}
     </main>
   );
 }

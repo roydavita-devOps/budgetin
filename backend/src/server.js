@@ -40,7 +40,15 @@ redis.connect().catch((error) => console.error('Redis connect failed:', error.me
 
 function signToken(user) {
   return jwt.sign(
-    { sub: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name, is_admin: user.is_admin },
+    {
+      sub: user.id,
+      email: user.email,
+      phone_number: user.phone_number,
+      display_name: user.display_name,
+      is_admin: user.is_admin,
+      is_verified: user.is_verified,
+      is_blocked: user.is_blocked,
+    },
     jwtSecret,
     { expiresIn: '7d' },
   );
@@ -62,6 +70,8 @@ function authRequired(req, res, next) {
       phone_number: payload.phone_number,
       display_name: payload.display_name,
       is_admin: payload.is_admin,
+      is_verified: payload.is_verified,
+      is_blocked: payload.is_blocked,
     };
     return next();
   } catch {
@@ -150,9 +160,14 @@ async function findLinkedTelegramUser(telegramUserId) {
        u.phone_number,
        u.display_name,
        u.is_admin,
+       u.is_verified,
+       u.is_blocked,
+       u.verified_at,
+       u.blocked_at,
        u.created_at,
        ta.telegram_user_id,
        ta.telegram_chat_id,
+       ta.username,
        ta.first_name
      FROM telegram_accounts ta
      JOIN users u ON u.id = ta.user_id
@@ -190,6 +205,36 @@ async function findAdminTelegramAccounts() {
   return result.rows;
 }
 
+const userReturnFields = 'id, email, phone_number, display_name, is_admin, is_verified, is_blocked, verified_at, blocked_at, created_at';
+
+function verificationRequired(res) {
+  return res.status(403).json({
+    code: 'ACCOUNT_NOT_VERIFIED',
+    error: 'Akun kamu sedang menunggu verifikasi admin.',
+  });
+}
+
+function blockRequired(res) {
+  return res.status(403).json({
+    code: 'ACCOUNT_BLOCKED',
+    error: 'Akun kamu diblokir. Hubungi admin Budgetin.',
+  });
+}
+
+async function webFeatureRequired(req, res, next) {
+  const result = await query(
+    'SELECT is_verified, is_blocked FROM users WHERE id = $1',
+    [req.user.id],
+  );
+  const user = result.rows[0];
+
+  if (!user) return res.status(401).json({ error: 'User tidak ditemukan' });
+  if (user.is_blocked) return blockRequired(res);
+  if (!user.is_verified) return verificationRequired(res);
+
+  return next();
+}
+
 async function requireLinkedTelegramUser(req, res) {
   const telegramUserId = String(req.body.telegram_user_id || req.query.telegram_user_id || '').trim();
   if (!telegramUserId) {
@@ -202,6 +247,10 @@ async function requireLinkedTelegramUser(req, res) {
     res.status(403).json({ error: 'Akun belum terhubung. Tekan /start lalu Share Phone Number dulu.' });
     return null;
   }
+  if (user.is_blocked) {
+    blockRequired(res);
+    return null;
+  }
 
   return user;
 }
@@ -212,6 +261,11 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT UNIQUE');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by UUID REFERENCES users(id) ON DELETE SET NULL');
   await query(`
     CREATE TABLE IF NOT EXISTS telegram_accounts (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -255,7 +309,15 @@ async function ensureDatabaseSchema() {
   `);
   await query('ALTER TABLE deletion_requests ADD COLUMN IF NOT EXISTS scheduled_deletion_at TIMESTAMPTZ');
   await query('ALTER TABLE deletion_requests ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ');
-  await query('UPDATE users SET is_admin = TRUE WHERE phone_number = $1', [adminPhoneNumber]);
+  await query(
+    `UPDATE users
+     SET is_admin = TRUE,
+       is_verified = TRUE,
+       is_blocked = FALSE,
+       verified_at = COALESCE(verified_at, NOW())
+     WHERE phone_number = $1`,
+    [adminPhoneNumber],
+  );
 }
 
 function normalizeInput(value) {
@@ -512,7 +574,7 @@ app.post('/auth/register', async (req, res) => {
 
   try {
     const result = await query(
-      'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email, phone_number, display_name, is_admin, created_at',
+      `INSERT INTO users (email, password) VALUES ($1, $2) RETURNING ${userReturnFields}`,
       [email, passwordHash],
     );
     const user = result.rows[0];
@@ -527,7 +589,7 @@ app.post('/auth/register', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const result = await query('SELECT id, email, password, phone_number, display_name, is_admin, created_at FROM users WHERE email = $1', [email]);
+  const result = await query(`SELECT id, email, password, phone_number, display_name, is_admin, is_verified, is_blocked, verified_at, blocked_at, created_at FROM users WHERE email = $1`, [email]);
   const user = result.rows[0];
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -535,7 +597,18 @@ app.post('/auth/login', async (req, res) => {
   }
 
   return res.json({
-    user: { id: user.id, email: user.email, phone_number: user.phone_number, display_name: user.display_name, is_admin: user.is_admin, created_at: user.created_at },
+    user: {
+      id: user.id,
+      email: user.email,
+      phone_number: user.phone_number,
+      display_name: user.display_name,
+      is_admin: user.is_admin,
+      is_verified: user.is_verified,
+      is_blocked: user.is_blocked,
+      verified_at: user.verified_at,
+      blocked_at: user.blocked_at,
+      created_at: user.created_at,
+    },
     token: signToken(user),
   });
 });
@@ -590,7 +663,7 @@ app.post('/auth/verify-otp', async (req, res) => {
     `INSERT INTO users (phone_number)
      VALUES ($1)
      ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-     RETURNING id, email, phone_number, display_name, is_admin, created_at`,
+     RETURNING ${userReturnFields}`,
     [phoneNumber],
   );
   const user = userResult.rows[0];
@@ -600,7 +673,7 @@ app.post('/auth/verify-otp', async (req, res) => {
 });
 
 app.get('/me', authRequired, async (req, res) => {
-  const result = await query('SELECT id, email, phone_number, display_name, is_admin, created_at FROM users WHERE id = $1', [req.user.id]);
+  const result = await query(`SELECT ${userReturnFields} FROM users WHERE id = $1`, [req.user.id]);
   res.json({ user: result.rows[0] });
 });
 
@@ -651,7 +724,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
       `UPDATE users
        SET phone_number = $1
        WHERE id = $2
-       RETURNING id, email, phone_number, display_name, is_admin, created_at`,
+       RETURNING ${userReturnFields}`,
       [phoneNumber, existingTelegramAccount.user_id],
     );
     user = userResult.rows[0];
@@ -660,7 +733,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
       `INSERT INTO users (phone_number)
        VALUES ($1)
        ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
-       RETURNING id, email, phone_number, display_name, is_admin, created_at`,
+       RETURNING ${userReturnFields}`,
       [phoneNumber],
     );
     user = userResult.rows[0];
@@ -683,7 +756,13 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
   );
 
   const code = await createOtp(phoneNumber);
-  res.status(existingTelegramAccount ? 200 : 201).json({ user, otp: code, expires_in_seconds: 600 });
+  res.status(existingTelegramAccount ? 200 : 201).json({
+    user,
+    otp: code,
+    expires_in_seconds: 600,
+    is_new_registration: !existingTelegramAccount && !user.is_admin,
+    admins: await findAdminTelegramAccounts(),
+  });
 });
 
 app.patch('/telegram/profile', botInternalRequired, async (req, res) => {
@@ -699,7 +778,7 @@ app.patch('/telegram/profile', botInternalRequired, async (req, res) => {
     `UPDATE users
      SET display_name = $1
      WHERE id = $2
-     RETURNING id, email, phone_number, display_name, is_admin, created_at`,
+     RETURNING ${userReturnFields}`,
     [displayName, user.id],
   );
 
@@ -778,11 +857,60 @@ app.get('/telegram/summary', botInternalRequired, async (req, res) => {
 app.get('/telegram/exports/transactions.csv', botInternalRequired, async (req, res) => {
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;
+  if (user.is_blocked) return blockRequired(res);
+  if (!user.is_verified) return verificationRequired(res);
 
   const csv = await buildTransactionsCsv(user.id, req.query);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req.query)}"`);
   res.send(csv);
+});
+
+app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const action = req.body.action === 'verify' ? 'verify' : req.body.action === 'block' ? 'block' : null;
+  if (!action) return res.status(400).json({ error: 'action must be verify or block' });
+
+  const targetTelegramUserId = String(req.params.telegramUserId || '').trim();
+  const target = await findLinkedTelegramUser(targetTelegramUserId);
+  if (!target) return res.status(404).json({ error: 'User Telegram tidak ditemukan' });
+  if (target.is_admin && action === 'block') {
+    return res.status(400).json({ error: 'Admin tidak bisa diblokir lewat bot.' });
+  }
+
+  const result = action === 'verify'
+    ? await query(
+        `UPDATE users
+         SET is_verified = TRUE,
+           is_blocked = FALSE,
+           verified_at = NOW(),
+           verified_by = $1,
+           blocked_at = NULL
+         WHERE id = $2
+         RETURNING ${userReturnFields}`,
+        [admin.id, target.id],
+      )
+    : await query(
+        `UPDATE users
+         SET is_blocked = TRUE,
+           is_verified = FALSE,
+           blocked_at = NOW()
+         WHERE id = $1
+         RETURNING ${userReturnFields}`,
+        [target.id],
+      );
+
+  res.json({
+    user: result.rows[0],
+    telegram: {
+      telegram_user_id: target.telegram_user_id,
+      telegram_chat_id: target.telegram_chat_id,
+      username: target.username,
+      first_name: target.first_name,
+    },
+  });
 });
 
 app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) => {
@@ -1020,7 +1148,7 @@ app.post('/categories', authRequired, async (req, res) => {
   res.status(201).json({ data: result.rows[0] });
 });
 
-app.get('/transactions', authRequired, async (req, res) => {
+app.get('/transactions', authRequired, webFeatureRequired, async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 50), 100);
   const { where, params } = buildTransactionFilters(req.user.id, req.query);
   params.push(limit);
@@ -1035,13 +1163,13 @@ app.get('/transactions', authRequired, async (req, res) => {
   res.json({ data: withCategoryLabels(result.rows) });
 });
 
-app.post('/transactions', authRequired, async (req, res) => {
+app.post('/transactions', authRequired, webFeatureRequired, async (req, res) => {
   const result = await createTransactionForUser(req.user.id, req.body);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result);
 });
 
-app.delete('/transactions/:id', authRequired, async (req, res) => {
+app.delete('/transactions/:id', authRequired, webFeatureRequired, async (req, res) => {
   const result = await query(
     `DELETE FROM transactions
      WHERE id = $1 AND user_id = $2
@@ -1054,11 +1182,11 @@ app.delete('/transactions/:id', authRequired, async (req, res) => {
   res.json({ data: withCategoryLabels(result.rows)[0] });
 });
 
-app.get('/analytics/summary', authRequired, async (req, res) => {
+app.get('/analytics/summary', authRequired, webFeatureRequired, async (req, res) => {
   res.json({ data: await getSummaryForUser(req.user.id) });
 });
 
-app.get('/exports/transactions.csv', authRequired, async (req, res) => {
+app.get('/exports/transactions.csv', authRequired, webFeatureRequired, async (req, res) => {
   const csv = await buildTransactionsCsv(req.user.id, req.query);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(req.query)}"`);
