@@ -6,6 +6,7 @@ const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_de
 
 let offset = 0;
 const lastTransactionsByChat = new Map();
+const pendingDeleteTransactionsByChat = new Map();
 
 if (!token) {
   console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
@@ -90,6 +91,10 @@ async function handleMessage(message) {
 
   if (['/delete', '/hapus'].includes(command)) {
     return deleteTransaction(message, text);
+  }
+
+  if (['/konfirmasi_hapus', '/confirm_delete'].includes(command)) {
+    return confirmDeleteTransactions(message, text);
   }
 
   if (['/hapus_akun', '/delete_account'].includes(command)) {
@@ -291,17 +296,14 @@ function sendViewHelp(chatId) {
       '/ringkasan',
       'Lihat total pemasukan, pengeluaran, dan saldo.',
       '',
-      '/terakhir',
-      'Lihat 10 transaksi terbaru. Nomor dari daftar ini bisa dipakai untuk /hapus.',
-      '',
       '/riwayat',
-      'Lihat riwayat transaksi per 10 data.',
-      '',
-      '/riwayat 2',
-      'Lihat halaman berikutnya.',
+      'Lihat riwayat transaksi per 10 data. Bot akan memberi pilihan halaman.',
       '',
       '/hapus 1',
-      'Hapus transaksi nomor 1 dari daftar /terakhir.',
+      'Hapus transaksi nomor 1 dari daftar /riwayat.',
+      '',
+      '/hapus 1,2,3',
+      'Pilih beberapa transaksi dari daftar /riwayat untuk dihapus.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
@@ -343,7 +345,7 @@ function sendLegacyHelpMessage(chatId) {
       '',
       '/makan, /minum, /bensin, /transport, /lain',
       '/gaji, /freelance',
-      '/ringkasan, /terakhir, /riwayat',
+      '/ringkasan, /riwayat',
       '/export, /nama, /hapus, /hapus_akun',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
@@ -486,8 +488,9 @@ async function sendLastTransactions(message) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal mengambil transaksi');
 
-    lastTransactionsByChat.set(String(chatId), body.data);
-    if (!body.data.length) return sendMessage(chatId, 'Belum ada transaksi.');
+    const transactions = addDisplayNumbers(body.data, 0);
+    lastTransactionsByChat.set(String(chatId), transactions);
+    if (!transactions.length) return sendMessage(chatId, 'Belum ada transaksi.');
 
     return sendMessage(
       chatId,
@@ -495,7 +498,7 @@ async function sendLastTransactions(message) {
         '10 transaksi terbaru:',
         'Nomor di daftar ini bisa dipakai untuk /hapus.',
         '',
-        formatTransactions(body.data, 0),
+        formatTransactions(transactions, 0),
       ].join('\n'),
     );
   } catch (error) {
@@ -512,7 +515,7 @@ async function sendTransactionHistory(message, text) {
   try {
     const params = new URLSearchParams({
       telegram_user_id: String(message.from.id),
-      limit: String(limit),
+      limit: String(limit + 1),
       offset: String(offset),
       sort: 'newest',
     });
@@ -522,19 +525,29 @@ async function sendTransactionHistory(message, text) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal mengambil riwayat transaksi');
 
-    if (!body.data.length) {
+    const pageData = body.data.slice(0, limit);
+    const hasNextPage = body.data.length > limit;
+    const transactions = addDisplayNumbers(pageData, 0);
+
+    if (!transactions.length) {
       return sendMessage(chatId, page === 1 ? 'Belum ada transaksi.' : `Tidak ada transaksi di halaman ${page}.`);
     }
 
-    const nextHint = body.data.length === limit ? `\n\nKetik /riwayat ${page + 1} untuk halaman berikutnya.` : '';
+    lastTransactionsByChat.set(String(chatId), transactions);
+
     return sendMessage(
       chatId,
       [
         `Riwayat transaksi halaman ${page}`,
-        `Menampilkan data ${offset + 1}-${offset + body.data.length}.`,
+        `Menampilkan data ${offset + 1}-${offset + transactions.length}.`,
         '',
-        formatTransactions(body.data, offset),
-      ].join('\n') + nextHint,
+        formatTransactions(transactions, offset),
+        '',
+        'Nomor di daftar ini bisa dipakai untuk /hapus.',
+        'Contoh: /hapus 1 atau /hapus 1,2,3',
+        '',
+        historyPageChoices(page, hasNextPage),
+      ].join('\n'),
     );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
@@ -543,32 +556,106 @@ async function sendTransactionHistory(message, text) {
 
 async function deleteTransaction(message, text) {
   const chatId = message.chat.id;
-  const [, numberRaw] = text.trim().split(/\s+/);
-  const index = Number(numberRaw) - 1;
+  const [, numbersRaw] = text.trim().split(/\s+/);
+  const selectedNumbers = parseTransactionNumbers(numbersRaw);
   const cached = lastTransactionsByChat.get(String(chatId)) || [];
-  const transaction = cached[index];
+  const selectedTransactions = getTransactionsByDisplayNumbers(cached, selectedNumbers);
 
-  if (!transaction) {
-    return sendMessage(chatId, 'Pilih nomor dari /terakhir. Contoh: /hapus 1');
+  if (!selectedNumbers.length) {
+    return sendMessage(chatId, 'Pilih nomor dari /riwayat. Contoh: /hapus 1 atau /hapus 1,2,3');
   }
 
-  try {
-    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
-    const response = await fetch(`${backendUrl}/telegram/transactions/${transaction.id}?${params.toString()}`, {
-      method: 'DELETE',
-      headers: { 'x-bot-token': botInternalToken },
+  if (selectedTransactions.length !== selectedNumbers.length) {
+    return sendMessage(chatId, 'Ada nomor yang tidak ada di riwayat terakhir. Buka /riwayat lagi, lalu pilih nomor yang ingin dihapus.');
+  }
+
+  if (selectedTransactions.length > 1) {
+    pendingDeleteTransactionsByChat.set(String(chatId), {
+      numbersRaw: selectedNumbers.join(','),
+      transactionIds: selectedTransactions.map((item) => item.id),
+      expiresAt: Date.now() + 2 * 60 * 1000,
     });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Gagal menghapus transaksi');
+
+    return sendHtmlMessage(
+      chatId,
+      [
+        `Kamu akan menghapus ${selectedTransactions.length} transaksi:`,
+        '',
+        escapeHtml(formatTransactions(selectedTransactions, 0)),
+        '',
+        'Kalau yakin, copy command ini dalam 2 menit:',
+        `<code>/konfirmasi_hapus ${escapeHtml(selectedNumbers.join(','))}</code>`,
+      ].join('\n'),
+    );
+  }
+
+  const transaction = selectedTransactions[0];
+
+  try {
+    const deleted = await deleteTransactionsByIds(message.from.id, [transaction.id]);
+    const body = deleted[0];
 
     lastTransactionsByChat.set(
       String(chatId),
       cached.filter((item) => item.id !== transaction.id),
     );
-    return sendMessage(chatId, `Dihapus: ${labelType(body.data.type)} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+    return sendMessage(chatId, `Dihapus: ${labelType(body.type)} ${formatIdr(body.amount)} ${body.category_label}`);
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
+}
+
+async function confirmDeleteTransactions(message, text) {
+  const chatId = message.chat.id;
+  const [, numbersRaw] = text.trim().split(/\s+/);
+  const selectedNumbers = parseTransactionNumbers(numbersRaw);
+  const pending = pendingDeleteTransactionsByChat.get(String(chatId));
+
+  if (!selectedNumbers.length) {
+    return sendMessage(chatId, 'Tulis nomor yang ingin dikonfirmasi. Contoh: /konfirmasi_hapus 1,2,3');
+  }
+
+  if (!pending || pending.numbersRaw !== selectedNumbers.join(',')) {
+    return sendMessage(chatId, 'Tidak ada permintaan hapus yang cocok. Ketik /hapus 1,2,3 dulu.');
+  }
+
+  if (Date.now() > pending.expiresAt) {
+    pendingDeleteTransactionsByChat.delete(String(chatId));
+    return sendMessage(chatId, 'Konfirmasi hapus sudah kedaluwarsa. Ketik /hapus 1,2,3 lagi jika masih ingin menghapus.');
+  }
+
+  try {
+    const deleted = await deleteTransactionsByIds(message.from.id, pending.transactionIds);
+    const deletedIds = new Set(deleted.map((item) => item.id));
+    const cached = lastTransactionsByChat.get(String(chatId)) || [];
+
+    lastTransactionsByChat.set(
+      String(chatId),
+      cached.filter((item) => !deletedIds.has(item.id)),
+    );
+    pendingDeleteTransactionsByChat.delete(String(chatId));
+
+    return sendMessage(chatId, `Selesai. ${deleted.length} transaksi sudah dihapus.`);
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function deleteTransactionsByIds(telegramUserId, transactionIds) {
+  const deleted = [];
+
+  for (const transactionId of transactionIds) {
+    const params = new URLSearchParams({ telegram_user_id: String(telegramUserId) });
+    const response = await fetch(`${backendUrl}/telegram/transactions/${transactionId}?${params.toString()}`, {
+      method: 'DELETE',
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal menghapus transaksi');
+    deleted.push(body.data);
+  }
+
+  return deleted;
 }
 
 async function requestDeletion(message, requestType) {
@@ -970,10 +1057,38 @@ function parsePageNumber(text) {
   return Math.min(page, 100);
 }
 
+function addDisplayNumbers(transactions, offset = 0) {
+  return transactions.map((item, index) => ({
+    ...item,
+    display_number: offset + index + 1,
+  }));
+}
+
 function formatTransactions(transactions, offset = 0) {
   return transactions
-    .map((item, index) => `${offset + index + 1}. ${labelType(item.type)} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
+    .map((item, index) => `${item.display_number || offset + index + 1}. ${labelType(item.type)} ${formatIdr(item.amount)} ${item.category_label} - ${item.note || '-'}`)
     .join('\n');
+}
+
+function historyPageChoices(page, hasNextPage) {
+  const choices = ['Pilih halaman:'];
+  if (page > 1) choices.push(`/riwayat ${page - 1}`);
+  choices.push(`/riwayat ${page}`);
+  if (hasNextPage) choices.push(`/riwayat ${page + 1}`);
+  return choices.join('\n');
+}
+
+function parseTransactionNumbers(value) {
+  return [...new Set(String(value || '')
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((number) => Number.isInteger(number) && number > 0))];
+}
+
+function getTransactionsByDisplayNumbers(transactions, selectedNumbers) {
+  return selectedNumbers
+    .map((number) => transactions.find((item) => item.display_number === number))
+    .filter(Boolean);
 }
 
 function parseExportCommand(text) {
