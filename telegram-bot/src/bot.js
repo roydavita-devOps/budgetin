@@ -576,15 +576,15 @@ async function deleteTransaction(message, text) {
       expiresAt: Date.now() + 2 * 60 * 1000,
     });
 
-    return sendHtmlMessage(
+    return sendMessage(
       chatId,
       [
         `Kamu akan menghapus ${selectedTransactions.length} transaksi:`,
         '',
-        escapeHtml(formatTransactions(selectedTransactions, 0)),
+        formatTransactions(selectedTransactions, 0),
         '',
         'Kalau yakin, copy command ini dalam 2 menit:',
-        `<code>/konfirmasi_hapus ${escapeHtml(selectedNumbers.join(','))}</code>`,
+        `/konfirmasi_hapus ${selectedNumbers.join(',')}`,
       ].join('\n'),
     );
   }
