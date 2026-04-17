@@ -1344,7 +1344,7 @@ app.post('/categories', authRequired, async (req, res) => {
 });
 
 app.get('/transactions', authRequired, webFeatureRequired, async (req, res) => {
-  const limit = Math.min(Number(req.query.limit || 50), 100);
+  const limit = Math.min(Number(req.query.limit || 50), 500);
   const { where, params } = buildTransactionFilters(req.user.id, req.query);
   params.push(limit);
   const result = await query(
