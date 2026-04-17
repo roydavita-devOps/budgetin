@@ -3,6 +3,7 @@ import 'dotenv/config';
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
+const webAppUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
 
 let offset = 0;
 const lastTransactionsByChat = new Map();
@@ -20,6 +21,7 @@ if (!token) {
 
 async function poll() {
   console.log('Budgetin Telegram bot started.');
+  await setupBotCommands();
   while (true) {
     try {
       const updates = await telegram('getUpdates', { timeout: 25, offset });
@@ -32,6 +34,23 @@ async function poll() {
       console.error('Polling error:', error.message);
       await wait(3000);
     }
+  }
+}
+
+async function setupBotCommands() {
+  try {
+    await telegram('setMyCommands', {
+      commands: [
+        { command: 'mulai', description: 'Mulai dan hubungkan akun' },
+        { command: 'bantuan', description: 'Lihat menu Budgetin' },
+        { command: 'catat', description: 'Cara catat transaksi' },
+        { command: 'lihat', description: 'Lihat riwayat dan ringkasan' },
+        { command: 'export', description: 'Export data transaksi' },
+        { command: 'akun', description: 'Pengaturan akun' },
+      ],
+    });
+  } catch (error) {
+    console.error('Failed to set Telegram commands:', error.message);
   }
 }
 
@@ -191,13 +210,18 @@ async function sendStartMessage(message) {
         [
           `Halo ${name}, Telegram kamu sudah terhubung ke Budgetin.`,
           '',
-          'Kamu sudah bisa langsung mencatat transaksi.',
+          'Catat uang harian lewat Telegram, lalu lihat laporan lengkap di web.',
           '',
-          'Contoh:',
+          'Catat cepat:',
           '/makan nasi padang 18000',
           '/gaji april 7000000',
           '',
-          'Ketik /bantuan untuk melihat semua command.',
+          'Lihat menu:',
+          '/bantuan',
+          '',
+          'Dashboard web:',
+          webAppUrl,
+          '',
           'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
         ].join('\n'),
         { reply_markup: { remove_keyboard: true } },
@@ -208,13 +232,24 @@ async function sendStartMessage(message) {
   }
 
   return requestPhoneNumber(chatId, [
-    'Budgetin siap membantu.',
+    'Selamat datang di Budgetin.',
     '',
-    'Sebelum mulai:',
-    'Tekan tombol Share Phone Number supaya Telegram kamu terhubung ke dashboard web.',
+    'Budgetin membantu kamu mencatat pemasukan dan pengeluaran harian lewat Telegram.',
     '',
-    'Setelah terhubung, kamu tidak perlu share nomor lagi saat mengetik /mulai.',
-    'Setelah terhubung, ketik /bantuan untuk melihat command yang tersedia.',
+    'Setelah akun terhubung, kamu bisa langsung catat transaksi seperti ini:',
+    '',
+    '/makan nasi padang 18000',
+    '/gaji april 7000000',
+    '',
+    'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
+    '',
+    'Untuk melihat dashboard, filter, export, dan laporan lengkap, buka web Budgetin:',
+    webAppUrl,
+    '',
+    'Langkah pertama:',
+    'Tekan tombol Share Phone Number di bawah ini untuk menghubungkan Telegram kamu.',
+    '',
+    'Setelah terhubung, ketik /bantuan untuk melihat menu yang tersedia.',
   ]);
 }
 
@@ -425,7 +460,14 @@ async function handleContact(message) {
         `Kode OTP Budgetin kamu: ${body.otp}`,
         'Kode berlaku 10 menit. Masukkan kode ini di halaman login web.',
         '',
-        'Ketik /bantuan untuk melihat command yang tersedia.',
+        'Kamu bisa mulai catat transaksi dari Telegram:',
+        '/makan nasi padang 18000',
+        '/gaji april 7000000',
+        '',
+        'Ketik /bantuan untuk melihat menu lengkap.',
+        '',
+        'Dashboard web:',
+        webAppUrl,
       ].join('\n'),
       { reply_markup: { remove_keyboard: true } },
     );

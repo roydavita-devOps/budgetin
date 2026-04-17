@@ -29,6 +29,8 @@ Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command utama:
 /akun
 ```
 
+Bot otomatis memasang command menu Telegram, jadi user bisa tap menu `/` dan memilih `/mulai`, `/bantuan`, `/catat`, `/lihat`, `/export`, atau `/akun` tanpa mengetik manual. Gunakan `WEB_APP_URL` di `.env` untuk link dashboard yang dikirim bot saat onboarding.
+
 Command cepat yang tetap bisa dipakai:
 
 ```text

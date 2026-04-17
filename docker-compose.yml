@@ -69,6 +69,7 @@ services:
       BOT_USER_EMAIL: ${BOT_USER_EMAIL:-telegram@budgetin.local}
       BOT_USER_PASSWORD: ${BOT_USER_PASSWORD:-telegram_password}
       BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN:-change_me_internal_bot_token}
+      WEB_APP_URL: ${WEB_APP_URL:-http://localhost:3000}
     depends_on:
       - backend
     restart: unless-stopped
