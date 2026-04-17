@@ -5,6 +5,24 @@ const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 const webAppUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
 
+const defaultBotCommands = [
+  { command: 'mulai', description: 'Mulai dan hubungkan akun' },
+  { command: 'bantuan', description: 'Lihat menu Budgetin' },
+  { command: 'catat', description: 'Cara catat transaksi' },
+  { command: 'lihat', description: 'Lihat riwayat dan ringkasan' },
+  { command: 'export', description: 'Export data transaksi' },
+  { command: 'akun', description: 'Pengaturan akun' },
+];
+
+const adminBotCommands = [
+  { command: 'admin', description: 'Menu admin Budgetin' },
+  { command: 'admin_user', description: 'Lihat statistik user' },
+  { command: 'admin_ringkasan', description: 'Lihat ringkasan agregat' },
+  { command: 'admin_verifikasi_user', description: 'Verifikasi user' },
+  { command: 'admin_blokir_user', description: 'Blokir user' },
+  { command: 'admin_pulihkan_user', description: 'Pulihkan akun user' },
+];
+
 let offset = 0;
 const lastTransactionsByChat = new Map();
 const pendingDeleteTransactionsByChat = new Map();
@@ -40,17 +58,21 @@ async function poll() {
 async function setupBotCommands() {
   try {
     await telegram('setMyCommands', {
-      commands: [
-        { command: 'mulai', description: 'Mulai dan hubungkan akun' },
-        { command: 'bantuan', description: 'Lihat menu Budgetin' },
-        { command: 'catat', description: 'Cara catat transaksi' },
-        { command: 'lihat', description: 'Lihat riwayat dan ringkasan' },
-        { command: 'export', description: 'Export data transaksi' },
-        { command: 'akun', description: 'Pengaturan akun' },
-      ],
+      commands: defaultBotCommands,
     });
   } catch (error) {
     console.error('Failed to set Telegram commands:', error.message);
+  }
+}
+
+async function setupAdminBotCommands(chatId) {
+  try {
+    await telegram('setMyCommands', {
+      scope: { type: 'chat', chat_id: String(chatId) },
+      commands: [...defaultBotCommands, ...adminBotCommands],
+    });
+  } catch (error) {
+    console.error('Failed to set admin Telegram commands:', error.message);
   }
 }
 
@@ -65,7 +87,9 @@ async function handleMessage(message) {
   }
 
   if (['/help', '/bantuan'].includes(command)) {
-    return sendHelpMessage(chatId);
+    const account = await fetchTelegramAccount(message.from.id).catch(() => null);
+    if (account?.is_admin) await setupAdminBotCommands(chatId);
+    return sendHelpMessage(chatId, account);
   }
 
   const account = await ensureRegistered(message);
@@ -81,6 +105,12 @@ async function handleMessage(message) {
 
   if (command === '/akun') {
     return sendAccountHelp(chatId);
+  }
+
+  if (command === '/admin') {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    await setupAdminBotCommands(chatId);
+    return sendAdminHelp(chatId);
   }
 
   if (['/hubungkan_ulang', '/relink'].includes(command)) {
@@ -144,22 +174,37 @@ async function handleMessage(message) {
   }
 
   if (['/admin_setujui_hapus', '/admin_approve_delete'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideDeletionRequest(message, text, 'approve');
   }
 
   if (['/admin_tolak_hapus', '/admin_reject_delete'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideDeletionRequest(message, text, 'reject');
   }
 
+  if (['/admin_user', '/admin_users'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminUserStats(message);
+  }
+
+  if (['/admin_ringkasan', '/admin_summary'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminPlatformSummary(message);
+  }
+
   if (['/admin_verifikasi_user', '/admin_verify_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideUserVerification(message, text, 'verify');
   }
 
   if (['/admin_blokir_user', '/admin_block_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideUserVerification(message, text, 'block');
   }
 
   if (['/admin_pulihkan_user', '/admin_restore_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideUserVerification(message, text, 'restore');
   }
 
@@ -234,6 +279,7 @@ async function sendStartMessage(message) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
     if (account) {
+      if (account.is_admin) await setupAdminBotCommands(chatId);
       if (account.is_deleted) {
         return sendDeletedAccountMessage(chatId, account, { reply_markup: { remove_keyboard: true } });
       }
@@ -332,7 +378,23 @@ async function fetchTelegramAccount(telegramUserId) {
   return body.user;
 }
 
-function sendHelpMessage(chatId) {
+function sendHelpMessage(chatId, account = null) {
+  const adminLines = account?.is_admin
+    ? [
+        '',
+        'Menu admin:',
+        '',
+        '/admin',
+        'Lihat command khusus admin.',
+        '',
+        '/admin_user',
+        'Lihat jumlah user terdaftar dan statusnya.',
+        '',
+        '/admin_ringkasan',
+        'Lihat ringkasan agregat tanpa detail transaksi user.',
+      ]
+    : [];
+
   return sendMessage(
     chatId,
     [
@@ -351,12 +413,41 @@ function sendHelpMessage(chatId) {
       '',
       '/akun',
       'Untuk ubah nama, hubungkan nomor, atau hapus akun.',
+      ...adminLines,
       '',
       'Catatan penting:',
       'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
       'Contoh benar: /makan nasi padang 18000',
       '',
       'Jika belum terdaftar, ketik /mulai lalu tekan Share Phone Number.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendAdminHelp(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Menu admin Budgetin:',
+      '',
+      '/admin_user',
+      'Lihat jumlah user terdaftar, verified, pending, blocked, deleted, dan aktif bulan ini.',
+      '',
+      '/admin_ringkasan',
+      'Lihat jumlah transaksi dan ringkasan agregat. Nominal disembunyikan jika user aktif bulan ini kurang dari 5.',
+      '',
+      '/admin_verifikasi_user TELEGRAM_ID',
+      'Verifikasi user baru.',
+      '',
+      '/admin_blokir_user TELEGRAM_ID',
+      'Blokir user bermasalah.',
+      '',
+      '/admin_pulihkan_user TELEGRAM_ID',
+      'Pulihkan akun yang dinonaktifkan dalam masa recovery.',
+      '',
+      'Catatan privacy:',
+      'Admin tidak melihat riwayat transaksi detail milik user.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
@@ -523,6 +614,7 @@ async function handleContact(message) {
         first_name: message.from.first_name || '',
       });
     }
+    if (body.user?.is_admin) await setupAdminBotCommands(chatId);
 
     return sendMessage(
       chatId,
@@ -1118,6 +1210,84 @@ async function decideUserVerification(message, text, action) {
   }
 }
 
+async function sendAdminUserStats(message) {
+  const chatId = message.chat.id;
+
+  try {
+    const params = new URLSearchParams({ admin_telegram_user_id: String(message.from.id) });
+    const response = await fetch(`${backendUrl}/telegram/admin/user-stats?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil statistik user');
+
+    const data = body.data;
+    return sendMessage(
+      chatId,
+      [
+        'Statistik user Budgetin',
+        '',
+        `Total akun: ${formatNumber(data.total_users)}`,
+        `User biasa: ${formatNumber(data.regular_users)}`,
+        `Admin: ${formatNumber(data.admin_users)}`,
+        '',
+        `Verified: ${formatNumber(data.verified_users)}`,
+        `Menunggu verifikasi: ${formatNumber(data.pending_users)}`,
+        `Diblokir: ${formatNumber(data.blocked_users)}`,
+        `Dinonaktifkan: ${formatNumber(data.deleted_users)}`,
+        '',
+        `User aktif bulan ini: ${formatNumber(data.active_users_this_month)}`,
+      ].join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendAdminPlatformSummary(message) {
+  const chatId = message.chat.id;
+
+  try {
+    const params = new URLSearchParams({ admin_telegram_user_id: String(message.from.id) });
+    const response = await fetch(`${backendUrl}/telegram/admin/platform-summary?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil ringkasan admin');
+
+    const data = body.data;
+    const lines = [
+      'Ringkasan agregat Budgetin',
+      '',
+      `Total transaksi: ${formatNumber(data.total_transactions)}`,
+      `Transaksi bulan ini: ${formatNumber(data.transactions_this_month)}`,
+      `User aktif bulan ini: ${formatNumber(data.active_users_this_month)}`,
+    ];
+
+    if (!data.can_show_money) {
+      lines.push(
+        '',
+        `Nominal agregat disembunyikan karena user aktif bulan ini kurang dari ${data.privacy_threshold}.`,
+        'Ini untuk menjaga privacy user saat jumlah user masih sedikit.',
+      );
+      return sendMessage(chatId, lines.join('\n'));
+    }
+
+    lines.push(
+      '',
+      `Total pemasukan bulan ini: ${formatIdr(data.income_this_month)}`,
+      `Total pengeluaran bulan ini: ${formatIdr(data.expense_this_month)}`,
+      `Kategori pengeluaran terbesar: ${data.top_expense_category_this_month?.category_label || '-'}`,
+      '',
+      'Catatan: ini agregat semua user, bukan detail transaksi user.',
+    );
+
+    return sendMessage(chatId, lines.join('\n'));
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
 async function sendSummary(message) {
   const chatId = message.chat.id;
   try {
@@ -1489,6 +1659,12 @@ function formatIdr(value) {
   return new Intl.NumberFormat('id-ID', {
     style: 'currency',
     currency: 'IDR',
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat('id-ID', {
     maximumFractionDigits: 0,
   }).format(value || 0);
 }

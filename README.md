@@ -33,6 +33,8 @@ Bot otomatis memasang command menu Telegram, jadi user bisa tap menu `/` dan mem
 
 Saat user baru share nomor Telegram, admin akan menerima notifikasi verifikasi. User tetap bisa mencatat transaksi lewat Telegram, tetapi dashboard web lengkap, grafik, transaksi lengkap, dan export baru aktif setelah admin menjalankan `/admin_verifikasi_user TELEGRAM_ID`. Admin bisa memblokir user dengan `/admin_blokir_user TELEGRAM_ID` dan memulihkan akun nonaktif dengan `/admin_pulihkan_user TELEGRAM_ID`.
 
+Akun admin mendapat menu Telegram khusus berisi `/admin`, `/admin_user`, dan `/admin_ringkasan`. Admin hanya melihat statistik user dan ringkasan agregat, bukan detail transaksi pribadi user. Nominal agregat disembunyikan jika user aktif bulan ini kurang dari 5 untuk menjaga privacy.
+
 Command cepat yang tetap bisa dipakai:
 
 ```text
@@ -53,6 +55,9 @@ Command cepat yang tetap bisa dipakai:
 /konfirmasi_hapus_akun KODE
 /nama Roy
 /hubungkan_ulang
+/admin
+/admin_user
+/admin_ringkasan
 /export_semua
 /export_bulan
 /export_bulan 2026-04 makan

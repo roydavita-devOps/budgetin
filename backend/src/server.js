@@ -895,6 +895,112 @@ app.get('/telegram/exports/transactions.csv', botInternalRequired, async (req, r
   res.send(csv);
 });
 
+app.get('/telegram/admin/user-stats', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const result = await query(
+    `SELECT
+       COUNT(*)::int AS total_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE)::int AS regular_users,
+       COUNT(*) FILTER (WHERE is_admin = TRUE)::int AS admin_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_verified = TRUE AND is_blocked = FALSE AND is_deleted = FALSE)::int AS verified_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_verified = FALSE AND is_blocked = FALSE AND is_deleted = FALSE)::int AS pending_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_blocked = TRUE AND is_deleted = FALSE)::int AS blocked_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_deleted = TRUE)::int AS deleted_users
+     FROM users`,
+  );
+
+  const activeThisMonth = await query(
+    `SELECT COUNT(DISTINCT t.user_id)::int AS active_users_this_month
+     FROM transactions t
+     JOIN users u ON u.id = t.user_id
+     WHERE u.is_admin = FALSE
+       AND u.is_deleted = FALSE
+       AND t.created_at >= DATE_TRUNC('month', NOW())`,
+  );
+
+  res.json({
+    data: {
+      ...result.rows[0],
+      active_users_this_month: activeThisMonth.rows[0].active_users_this_month,
+    },
+  });
+});
+
+app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const threshold = 5;
+  const counts = await query(
+    `SELECT
+       COUNT(*)::int AS total_transactions,
+       COUNT(*) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS transactions_this_month,
+       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS active_users_this_month
+     FROM transactions t
+     JOIN users u ON u.id = t.user_id
+     WHERE u.is_admin = FALSE
+       AND u.is_deleted = FALSE`,
+  );
+
+  const base = counts.rows[0];
+  const canShowMoney = Number(base.active_users_this_month) >= threshold;
+  if (!canShowMoney) {
+    return res.json({
+      data: {
+        ...base,
+        privacy_threshold: threshold,
+        can_show_money: false,
+        income_this_month: null,
+        expense_this_month: null,
+        top_expense_category_this_month: null,
+      },
+    });
+  }
+
+  const totals = await query(
+    `SELECT
+       COALESCE(SUM(CASE WHEN t.type = 'income' THEN t.amount ELSE 0 END), 0)::float AS income_this_month,
+       COALESCE(SUM(CASE WHEN t.type = 'expense' THEN t.amount ELSE 0 END), 0)::float AS expense_this_month
+     FROM transactions t
+     JOIN users u ON u.id = t.user_id
+     WHERE u.is_admin = FALSE
+       AND u.is_deleted = FALSE
+       AND t.created_at >= DATE_TRUNC('month', NOW())`,
+  );
+
+  const topExpenseCategory = await query(
+    `SELECT t.category, COALESCE(SUM(t.amount), 0)::float AS total
+     FROM transactions t
+     JOIN users u ON u.id = t.user_id
+     WHERE u.is_admin = FALSE
+       AND u.is_deleted = FALSE
+       AND t.type = 'expense'
+       AND t.created_at >= DATE_TRUNC('month', NOW())
+     GROUP BY t.category
+     ORDER BY total DESC
+     LIMIT 1`,
+  );
+
+  res.json({
+    data: {
+      ...base,
+      privacy_threshold: threshold,
+      can_show_money: true,
+      income_this_month: totals.rows[0].income_this_month,
+      expense_this_month: totals.rows[0].expense_this_month,
+      top_expense_category_this_month: topExpenseCategory.rows[0]
+        ? {
+            category: topExpenseCategory.rows[0].category,
+            category_label: categoryLabel(topExpenseCategory.rows[0].category),
+            total: topExpenseCategory.rows[0].total,
+          }
+        : null,
+    },
+  });
+});
+
 app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (req, res) => {
   const admin = await requireAdminTelegramUser(req, res);
   if (!admin) return;
