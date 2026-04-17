@@ -41,8 +41,9 @@ export default function Home() {
   const expenseSummary = summary?.byCategory?.filter((item) => item.type === 'expense') || [];
   const incomeSummary = summary?.byCategory?.filter((item) => item.type === 'income') || [];
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
-  const isPendingVerification = Boolean(token && user && !user.is_verified && !user.is_blocked);
-  const isBlocked = Boolean(token && user?.is_blocked);
+  const isDeleted = Boolean(token && user?.is_deleted);
+  const isPendingVerification = Boolean(token && user && !user.is_verified && !user.is_blocked && !user.is_deleted);
+  const isBlocked = Boolean(token && user?.is_blocked && !user.is_deleted);
 
   async function request(path, options = {}) {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -92,7 +93,7 @@ export default function Home() {
 
   async function loadData() {
     if (!token) return;
-    if (!user?.is_verified || user?.is_blocked) {
+    if (!user?.is_verified || user?.is_blocked || user?.is_deleted) {
       setSummary(null);
       setTransactions([]);
       return;
@@ -194,7 +195,7 @@ export default function Home() {
 
   useEffect(() => {
     loadData().catch(console.error);
-  }, [token, user?.is_verified, user?.is_blocked, filters.type, filters.category, filters.sort, filters.month]);
+  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, filters.type, filters.category, filters.sort, filters.month]);
 
   return (
     <main className="min-h-screen">
@@ -247,6 +248,22 @@ export default function Home() {
         </section>
       )}
 
+      {isDeleted && (
+        <section className="mx-auto max-w-3xl px-5 py-10">
+          <div className="rounded border border-[#b33a3a] bg-white p-6">
+            <h2 className="text-2xl font-bold text-[#b33a3a]">Akun dinonaktifkan</h2>
+            <p className="mt-3 text-[#4c5e55]">
+              Akun Budgetin kamu sedang dinonaktifkan. Hubungi admin jika ingin recovery.
+            </p>
+            {user?.delete_recovery_until && (
+              <p className="mt-4 text-sm text-[#63736b]">
+                Recovery tersedia sampai {new Date(user.delete_recovery_until).toLocaleString('id-ID')}.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
       {isPendingVerification && (
         <section className="mx-auto max-w-3xl px-5 py-10">
           <div className="rounded border border-[#d8e1dc] bg-white p-6">
@@ -261,7 +278,7 @@ export default function Home() {
         </section>
       )}
 
-      {(isBlocked || isPendingVerification) ? null : (
+      {(isBlocked || isDeleted || isPendingVerification) ? null : (
       <section className="mx-auto grid max-w-6xl gap-6 px-5 py-8 lg:grid-cols-[1fr_1.3fr]">
         <div className="rounded border border-[#d8e1dc] bg-white p-5">
           <h2 className="text-xl font-semibold">Tambah transaksi</h2>

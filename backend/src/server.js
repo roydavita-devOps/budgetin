@@ -48,6 +48,7 @@ function signToken(user) {
       is_admin: user.is_admin,
       is_verified: user.is_verified,
       is_blocked: user.is_blocked,
+      is_deleted: user.is_deleted,
     },
     jwtSecret,
     { expiresIn: '7d' },
@@ -72,6 +73,7 @@ function authRequired(req, res, next) {
       is_admin: payload.is_admin,
       is_verified: payload.is_verified,
       is_blocked: payload.is_blocked,
+      is_deleted: payload.is_deleted,
     };
     return next();
   } catch {
@@ -162,8 +164,11 @@ async function findLinkedTelegramUser(telegramUserId) {
        u.is_admin,
        u.is_verified,
        u.is_blocked,
+       u.is_deleted,
        u.verified_at,
        u.blocked_at,
+       u.deleted_at,
+       u.delete_recovery_until,
        u.created_at,
        ta.telegram_user_id,
        ta.telegram_chat_id,
@@ -190,6 +195,10 @@ async function requireAdminTelegramUser(req, res) {
     res.status(403).json({ error: 'Command ini hanya bisa dipakai admin.' });
     return null;
   }
+  if (user.is_deleted || user.is_blocked) {
+    res.status(403).json({ error: 'Akun admin tidak aktif.' });
+    return null;
+  }
 
   return user;
 }
@@ -200,12 +209,13 @@ async function findAdminTelegramAccounts() {
      FROM users u
      JOIN telegram_accounts ta ON ta.user_id = u.id
      WHERE u.is_admin = TRUE
+       AND u.is_deleted = FALSE
      ORDER BY ta.linked_at DESC`,
   );
   return result.rows;
 }
 
-const userReturnFields = 'id, email, phone_number, display_name, is_admin, is_verified, is_blocked, verified_at, blocked_at, created_at';
+const userReturnFields = 'id, email, phone_number, display_name, is_admin, is_verified, is_blocked, is_deleted, verified_at, blocked_at, deleted_at, delete_recovery_until, created_at';
 
 function verificationRequired(res) {
   return res.status(403).json({
@@ -221,14 +231,22 @@ function blockRequired(res) {
   });
 }
 
+function deletedRequired(res) {
+  return res.status(403).json({
+    code: 'ACCOUNT_DELETED',
+    error: 'Akun kamu sudah dinonaktifkan. Hubungi admin Budgetin jika ingin recovery.',
+  });
+}
+
 async function webFeatureRequired(req, res, next) {
   const result = await query(
-    'SELECT is_verified, is_blocked FROM users WHERE id = $1',
+    'SELECT is_verified, is_blocked, is_deleted FROM users WHERE id = $1',
     [req.user.id],
   );
   const user = result.rows[0];
 
   if (!user) return res.status(401).json({ error: 'User tidak ditemukan' });
+  if (user.is_deleted) return deletedRequired(res);
   if (user.is_blocked) return blockRequired(res);
   if (!user.is_verified) return verificationRequired(res);
 
@@ -247,6 +265,10 @@ async function requireLinkedTelegramUser(req, res) {
     res.status(403).json({ error: 'Akun belum terhubung. Tekan /start lalu Share Phone Number dulu.' });
     return null;
   }
+  if (user.is_deleted) {
+    deletedRequired(res);
+    return null;
+  }
   if (user.is_blocked) {
     blockRequired(res);
     return null;
@@ -263,8 +285,11 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ');
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_recovery_until TIMESTAMPTZ');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by UUID REFERENCES users(id) ON DELETE SET NULL');
   await query(`
     CREATE TABLE IF NOT EXISTS telegram_accounts (
@@ -314,6 +339,7 @@ async function ensureDatabaseSchema() {
      SET is_admin = TRUE,
        is_verified = TRUE,
        is_blocked = FALSE,
+       is_deleted = FALSE,
        verified_at = COALESCE(verified_at, NOW())
      WHERE phone_number = $1`,
     [adminPhoneNumber],
@@ -589,7 +615,7 @@ app.post('/auth/register', async (req, res) => {
 app.post('/auth/login', async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
-  const result = await query(`SELECT id, email, password, phone_number, display_name, is_admin, is_verified, is_blocked, verified_at, blocked_at, created_at FROM users WHERE email = $1`, [email]);
+  const result = await query(`SELECT id, email, password, phone_number, display_name, is_admin, is_verified, is_blocked, is_deleted, verified_at, blocked_at, deleted_at, delete_recovery_until, created_at FROM users WHERE email = $1`, [email]);
   const user = result.rows[0];
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
@@ -605,8 +631,11 @@ app.post('/auth/login', async (req, res) => {
       is_admin: user.is_admin,
       is_verified: user.is_verified,
       is_blocked: user.is_blocked,
+      is_deleted: user.is_deleted,
       verified_at: user.verified_at,
       blocked_at: user.blocked_at,
+      deleted_at: user.deleted_at,
+      delete_recovery_until: user.delete_recovery_until,
       created_at: user.created_at,
     },
     token: signToken(user),
@@ -870,8 +899,8 @@ app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (r
   const admin = await requireAdminTelegramUser(req, res);
   if (!admin) return;
 
-  const action = req.body.action === 'verify' ? 'verify' : req.body.action === 'block' ? 'block' : null;
-  if (!action) return res.status(400).json({ error: 'action must be verify or block' });
+  const action = ['verify', 'block', 'restore'].includes(req.body.action) ? req.body.action : null;
+  if (!action) return res.status(400).json({ error: 'action must be verify, block, or restore' });
 
   const targetTelegramUserId = String(req.params.telegramUserId || '').trim();
   const target = await findLinkedTelegramUser(targetTelegramUserId);
@@ -879,20 +908,43 @@ app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (r
   if (target.is_admin && action === 'block') {
     return res.status(400).json({ error: 'Admin tidak bisa diblokir lewat bot.' });
   }
+  if (action === 'restore' && !target.is_deleted) {
+    return res.status(409).json({ error: 'Akun ini tidak sedang dinonaktifkan.' });
+  }
+  if (action === 'restore' && target.delete_recovery_until && new Date(target.delete_recovery_until) < new Date()) {
+    return res.status(409).json({ error: 'Masa recovery 2 hari sudah lewat.' });
+  }
 
-  const result = action === 'verify'
-    ? await query(
+  let result;
+  if (action === 'verify') {
+    result = await query(
         `UPDATE users
          SET is_verified = TRUE,
            is_blocked = FALSE,
+           is_deleted = FALSE,
            verified_at = NOW(),
            verified_by = $1,
-           blocked_at = NULL
+           blocked_at = NULL,
+           deleted_at = NULL,
+           delete_recovery_until = NULL
          WHERE id = $2
          RETURNING ${userReturnFields}`,
         [admin.id, target.id],
-      )
-    : await query(
+      );
+  } else if (action === 'restore') {
+    result = await query(
+      `UPDATE users
+       SET is_deleted = FALSE,
+         is_blocked = FALSE,
+         deleted_at = NULL,
+         delete_recovery_until = NULL,
+         blocked_at = NULL
+       WHERE id = $1
+       RETURNING ${userReturnFields}`,
+      [target.id],
+    );
+  } else {
+    result = await query(
         `UPDATE users
          SET is_blocked = TRUE,
            is_verified = FALSE,
@@ -901,6 +953,7 @@ app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (r
          RETURNING ${userReturnFields}`,
         [target.id],
       );
+  }
 
   res.json({
     user: result.rows[0],
@@ -940,10 +993,7 @@ app.post('/telegram/deletion-requests', botInternalRequired, async (req, res) =>
   );
 
   if (existing.rows[0]) {
-    const pendingMessage =
-      existing.rows[0].status === 'approved'
-        ? `Permintaan ${deletionTypeLabel(requestType)} sudah dikonfirmasi dan sedang menunggu jadwal hapus.`
-        : `Permintaan ${deletionTypeLabel(requestType)} masih menunggu konfirmasi.`;
+    const pendingMessage = `Permintaan ${deletionTypeLabel(requestType)} masih menunggu konfirmasi.`;
     return res.status(409).json({
       error: pendingMessage,
       request: deletionRequestPublicFields(existing.rows[0]),
@@ -985,9 +1035,9 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;
 
-  const action = ['confirm', 'confirm_now', 'cancel'].includes(req.body.action) ? req.body.action : null;
+  const action = req.body.action === 'confirm' ? 'confirm' : null;
   if (!action) {
-    return res.status(400).json({ error: 'action must be confirm, confirm_now, or cancel' });
+    return res.status(400).json({ error: 'action must be confirm' });
   }
 
   const requestResult = await query(
@@ -1010,52 +1060,9 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
     return res.status(409).json({ error: 'Permintaan ini sudah selesai diproses.', request: deletionRequestPublicFields(deletionRequest) });
   }
 
-  if (action === 'cancel') {
-    if (!['pending', 'approved'].includes(deletionRequest.status)) {
-      return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequestPublicFields(deletionRequest) });
-    }
-
-    const canceled = await query(
-      `UPDATE deletion_requests
-       SET status = 'rejected', decided_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [deletionRequest.id],
-    );
-    return res.json({ request: deletionRequestPublicFields(canceled.rows[0]) });
-  }
-
-  if (action === 'confirm_now') {
-    if (!['pending', 'approved'].includes(deletionRequest.status)) {
-      return res.status(409).json({ error: `Permintaan ini sudah ${deletionRequest.status}.`, request: deletionRequestPublicFields(deletionRequest) });
-    }
-    if (user.is_admin) {
-      return res.status(400).json({ error: 'Akun admin tidak bisa dihapus lewat bot.' });
-    }
-
-    const processed = await query(
-      `UPDATE deletion_requests
-       SET status = 'approved',
-         scheduled_deletion_at = NOW(),
-         processed_at = NOW(),
-         decided_at = COALESCE(decided_at, NOW())
-       WHERE id = $1
-       RETURNING *`,
-      [deletionRequest.id],
-    );
-
-    await query('DELETE FROM users WHERE id = $1', [user.id]);
-    await redis.del(`summary:${user.id}`).catch(() => {});
-
-    return res.json({
-      request: deletionRequestPublicFields(processed.rows[0]),
-      deleted_now: true,
-    });
-  }
-
   if (deletionRequest.status === 'approved') {
     return res.status(409).json({
-      error: 'Permintaan hapus akun sudah dikonfirmasi.',
+      error: 'Permintaan hapus akun sudah diproses.',
       request: deletionRequestPublicFields(deletionRequest),
     });
   }
@@ -1066,17 +1073,41 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
     return res.status(400).json({ error: 'Akun admin tidak bisa dihapus lewat bot.' });
   }
 
-  const scheduled = await query(
+  const processed = await query(
     `UPDATE deletion_requests
      SET status = 'approved',
-       scheduled_deletion_at = NOW() + INTERVAL '24 hours',
+       scheduled_deletion_at = NOW(),
+       processed_at = NOW(),
        decided_at = NOW()
      WHERE id = $1
      RETURNING *`,
     [deletionRequest.id],
   );
 
-  res.json({ request: deletionRequestPublicFields(scheduled.rows[0]) });
+  const deletedUser = await query(
+    `UPDATE users
+     SET is_deleted = TRUE,
+       is_blocked = TRUE,
+       deleted_at = NOW(),
+       delete_recovery_until = NOW() + INTERVAL '2 days',
+       blocked_at = NOW()
+     WHERE id = $1
+     RETURNING ${userReturnFields}`,
+    [user.id],
+  );
+  await redis.del(`summary:${user.id}`).catch(() => {});
+
+  res.json({
+    request: deletionRequestPublicFields(processed.rows[0]),
+    user: deletedUser.rows[0],
+    telegram: {
+      telegram_user_id: user.telegram_user_id,
+      telegram_chat_id: user.telegram_chat_id,
+      username: user.username,
+      first_name: user.first_name,
+    },
+    admins: await findAdminTelegramAccounts(),
+  });
 });
 
 app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async (req, res) => {
@@ -1104,7 +1135,17 @@ app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async 
   let deletedCount = 0;
   if (action === 'approve' && deletionRequest.user_id) {
     if (deletionRequest.request_type === 'account') {
-      const deleteResult = await query('DELETE FROM users WHERE id = $1 RETURNING id', [deletionRequest.user_id]);
+      const deleteResult = await query(
+        `UPDATE users
+         SET is_deleted = TRUE,
+           is_blocked = TRUE,
+           deleted_at = NOW(),
+           delete_recovery_until = NOW() + INTERVAL '2 days',
+           blocked_at = NOW()
+         WHERE id = $1
+         RETURNING id`,
+        [deletionRequest.user_id],
+      );
       deletedCount = deleteResult.rowCount;
       await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
     } else {
@@ -1203,34 +1244,15 @@ async function seedDefaultCategories(userId) {
 }
 
 async function processDueAccountDeletionRequests() {
-  const due = await query(
-    `SELECT id, user_id, request_code, requester_chat_id
-     FROM deletion_requests
+  await query(
+    `UPDATE deletion_requests
+     SET processed_at = NOW()
      WHERE request_type = 'account'
        AND status = 'approved'
        AND processed_at IS NULL
        AND scheduled_deletion_at IS NOT NULL
-       AND scheduled_deletion_at <= NOW()
-     ORDER BY scheduled_deletion_at ASC
-     LIMIT 20`,
+       AND scheduled_deletion_at <= NOW()`,
   );
-
-  for (const deletionRequest of due.rows) {
-    try {
-      if (deletionRequest.user_id) {
-        await query('DELETE FROM users WHERE id = $1', [deletionRequest.user_id]);
-        await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
-      }
-
-      await query('UPDATE deletion_requests SET processed_at = NOW() WHERE id = $1', [deletionRequest.id]);
-      await sendTelegramMessage(
-        deletionRequest.requester_chat_id,
-        `Akun Budgetin kamu sudah dihapus.\nKode request: ${deletionRequest.request_code}`,
-      ).catch(() => false);
-    } catch (error) {
-      console.error(`Failed to process deletion request ${deletionRequest.request_code}:`, error.message);
-    }
-  }
 }
 
 app.use((error, _req, res, _next) => {

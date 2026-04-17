@@ -9,8 +9,11 @@ CREATE TABLE IF NOT EXISTS users (
   is_admin BOOLEAN NOT NULL DEFAULT FALSE,
   is_verified BOOLEAN NOT NULL DEFAULT FALSE,
   is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+  is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   verified_at TIMESTAMPTZ,
   blocked_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  delete_recovery_until TIMESTAMPTZ,
   verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

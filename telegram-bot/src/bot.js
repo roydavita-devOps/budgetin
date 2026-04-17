@@ -135,14 +135,6 @@ async function handleMessage(message) {
     return confirmAccountDeletion(message, text);
   }
 
-  if (['/konfirmasi_hapus_akun_sekarang', '/confirm_delete_account_now'].includes(command)) {
-    return confirmAccountDeletionNow(message, text);
-  }
-
-  if (['/batal_hapus_akun', '/cancel_delete_account'].includes(command)) {
-    return cancelAccountDeletion(message, text);
-  }
-
   if (['/hapus_semua', '/delete_all'].includes(command)) {
     return requestDeletion(message, 'all_transactions');
   }
@@ -165,6 +157,10 @@ async function handleMessage(message) {
 
   if (['/admin_blokir_user', '/admin_block_user'].includes(command)) {
     return decideUserVerification(message, text, 'block');
+  }
+
+  if (['/admin_pulihkan_user', '/admin_restore_user'].includes(command)) {
+    return decideUserVerification(message, text, 'restore');
   }
 
   if (['/nama', '/setname'].includes(command)) {
@@ -196,6 +192,10 @@ async function handleMessage(message) {
 async function ensureRegistered(message) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
+    if (account?.is_deleted) {
+      await sendDeletedAccountMessage(message.chat.id, account);
+      return null;
+    }
     if (account?.is_blocked) {
       await sendMessage(
         message.chat.id,
@@ -234,6 +234,9 @@ async function sendStartMessage(message) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
     if (account) {
+      if (account.is_deleted) {
+        return sendDeletedAccountMessage(chatId, account, { reply_markup: { remove_keyboard: true } });
+      }
       if (account.is_blocked) {
         return sendMessage(
           chatId,
@@ -297,6 +300,23 @@ async function sendStartMessage(message) {
     '',
     'Setelah terhubung, ketik /bantuan untuk melihat menu yang tersedia.',
   ]);
+}
+
+function sendDeletedAccountMessage(chatId, account, extra = {}) {
+  const recoveryText = account?.delete_recovery_until
+    ? `Admin masih bisa recovery sampai ${formatDateTime(account.delete_recovery_until)}.`
+    : 'Hubungi admin Budgetin jika ingin recovery.';
+
+  return sendMessage(
+    chatId,
+    [
+      'Akun Budgetin kamu sedang dinonaktifkan.',
+      '',
+      recoveryText,
+      'Selama status ini aktif, Telegram dan dashboard web tidak bisa dipakai.',
+    ].join('\n'),
+    extra,
+  );
 }
 
 async function fetchTelegramAccount(telegramUserId) {
@@ -406,10 +426,7 @@ function sendAccountHelp(chatId) {
       'Ajukan permintaan hapus semua transaksi ke admin.',
       '',
       '/hapus_akun',
-      'Hapus akun. Bot akan memberi pilihan hapus 24 jam atau hapus sekarang.',
-      '',
-      '/batal_hapus_akun KODE',
-      'Batalkan hapus akun sebelum 24 jam.',
+      'Nonaktifkan akun sekarang. Admin masih bisa recovery maksimal 2 hari.',
       '',
       'Catatan:',
       'Kode hapus akun akan diberikan setelah kamu mengetik /hapus_akun.',
@@ -818,9 +835,6 @@ async function requestDeletion(message, requestType) {
 function sendAccountDeletionRequestMessage(chatId, request, existingMessage = '') {
   const code = request.request_code;
   const title = existingMessage || 'Permintaan hapus akun dibuat.';
-  const scheduledText = request.scheduled_deletion_at
-    ? `Akun sudah dijadwalkan terhapus otomatis pada ${formatDateTime(request.scheduled_deletion_at)}.`
-    : 'Akun belum dijadwalkan terhapus.';
 
   return sendHtmlMessage(
     chatId,
@@ -830,34 +844,22 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
       'Kode konfirmasi:',
       `<code>${escapeHtml(code)}</code>`,
       '',
-      escapeHtml(scheduledText),
       'Data kamu belum dihapus.',
       '',
-      'Pilihan 1 - Hapus aman:',
-      'Akun dihapus otomatis dalam 24 jam dan masih bisa dibatalkan.',
+      'Kalau command di bawah ini dikirim, akun langsung dinonaktifkan.',
+      'Telegram dan dashboard web tidak bisa dipakai setelah itu.',
+      '',
+      'Admin akan mendapat notifikasi dan masih bisa recovery maksimal 2 hari.',
+      'Lanjutkan hanya jika kamu sadar dan yakin.',
+      '',
+      'Copy command ini untuk konfirmasi:',
       `<code>/konfirmasi_hapus_akun ${escapeHtml(code)}</code>`,
-      '',
-      'Pilihan 2 - Hapus sekarang:',
-      'Akun dan seluruh data Budgetin akan dihapus permanen saat command dikirim.',
-      'Aksi ini tidak bisa dibatalkan. Pilih ini hanya jika kamu sadar dan yakin.',
-      `<code>/konfirmasi_hapus_akun_sekarang ${escapeHtml(code)}</code>`,
-      '',
-      'Kalau berubah pikiran, copy command ini sebelum 24 jam:',
-      `<code>/batal_hapus_akun ${escapeHtml(code)}</code>`,
     ].join('\n'),
   );
 }
 
 async function confirmAccountDeletion(message, text) {
   return updateAccountDeletionRequest(message, text, 'confirm');
-}
-
-async function confirmAccountDeletionNow(message, text) {
-  return updateAccountDeletionRequest(message, text, 'confirm_now');
-}
-
-async function cancelAccountDeletion(message, text) {
-  return updateAccountDeletionRequest(message, text, 'cancel');
 }
 
 async function updateAccountDeletionRequest(message, text, action) {
@@ -868,8 +870,6 @@ async function updateAccountDeletionRequest(message, text, action) {
   if (!code) {
     const examples = {
       confirm: '/konfirmasi_hapus_akun A1B2C3D4',
-      confirm_now: '/konfirmasi_hapus_akun_sekarang A1B2C3D4',
-      cancel: '/batal_hapus_akun A1B2C3D4',
     };
     const example = examples[action] || examples.confirm;
     return sendMessage(chatId, `Tulis kode request. Contoh: ${example}`);
@@ -890,32 +890,23 @@ async function updateAccountDeletionRequest(message, text, action) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal memproses hapus akun');
 
-    if (action === 'cancel') {
-      return sendMessage(chatId, `Hapus akun dibatalkan. Kode request: ${body.request.request_code}`);
-    }
-
-    if (action === 'confirm_now') {
-      return sendMessage(
-        chatId,
-        [
-          'Akun Budgetin kamu sudah dihapus sekarang.',
-          `Kode request: ${body.request.request_code}`,
-        ].join('\n'),
-      );
-    }
+    await notifyAdminsAboutAccountDeleted(body.user, body.request, body.admins || [], body.telegram || {
+      telegram_user_id: String(message.from.id),
+      telegram_chat_id: String(chatId),
+      username: message.from.username || '',
+      first_name: message.from.first_name || '',
+    });
 
     return sendHtmlMessage(
       chatId,
       [
-        'Hapus akun sudah dikonfirmasi.',
+        'Akun Budgetin kamu sudah dinonaktifkan sekarang.',
         '',
         'Kode request:',
         `<code>${escapeHtml(body.request.request_code)}</code>`,
         '',
-        `Akun akan dihapus otomatis pada ${escapeHtml(formatDateTime(body.request.scheduled_deletion_at))}.`,
-        '',
-        'Kalau berubah pikiran, copy command ini sebelum waktunya:',
-        `<code>/batal_hapus_akun ${escapeHtml(body.request.request_code)}</code>`,
+        `Admin masih bisa recovery sampai ${escapeHtml(formatDateTime(body.user.delete_recovery_until))}.`,
+        'Jika ini tidak sengaja, segera hubungi admin Budgetin.',
       ].join('\n'),
     );
   } catch (error) {
@@ -939,6 +930,32 @@ async function notifyAdminsAboutDeletionRequest(request, admins) {
     '',
     'Tolak:',
     `<code>/admin_tolak_hapus ${escapeHtml(request.request_code)}</code>`,
+  ].join('\n');
+
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
+}
+
+async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramProfile) {
+  const uniqueChatIds = new Set(admins.map((admin) => admin.telegram_chat_id).filter(Boolean));
+  if (!uniqueChatIds.size) return;
+
+  const telegramUserId = telegramProfile?.telegram_user_id || '-';
+  const username = telegramProfile?.username ? `@${telegramProfile.username}` : '-';
+  const firstName = telegramProfile?.first_name || '-';
+  const recoveryUntil = user?.delete_recovery_until ? formatDateTime(user.delete_recovery_until) : '-';
+  const text = [
+    'User menonaktifkan akun Budgetin.',
+    '',
+    `Nama: ${escapeHtml(user?.display_name || firstName || '-')}`,
+    `Username: ${escapeHtml(username)}`,
+    `Nomor: ${escapeHtml(user?.phone_number || '-')}`,
+    `Telegram ID: ${escapeHtml(telegramUserId)}`,
+    `Kode request: ${escapeHtml(request?.request_code || '-')}`,
+    '',
+    `Recovery sampai: ${escapeHtml(recoveryUntil)}`,
+    '',
+    'Pulihkan akun:',
+    `<code>/admin_pulihkan_user ${escapeHtml(telegramUserId)}</code>`,
   ].join('\n');
 
   await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
@@ -1028,7 +1045,12 @@ async function decideUserVerification(message, text, action) {
   const telegramUserId = String(telegramUserIdRaw || '').trim();
 
   if (!telegramUserId) {
-    const example = action === 'verify' ? '/admin_verifikasi_user 123456789' : '/admin_blokir_user 123456789';
+    const examples = {
+      verify: '/admin_verifikasi_user 123456789',
+      block: '/admin_blokir_user 123456789',
+      restore: '/admin_pulihkan_user 123456789',
+    };
+    const example = examples[action] || examples.verify;
     return sendMessage(chatId, `Tulis Telegram ID user. Contoh: ${example}`);
   }
 
@@ -1061,6 +1083,22 @@ async function decideUserVerification(message, text, action) {
       }
 
       return sendMessage(chatId, `User ${body.user.phone_number || telegramUserId} sudah diverifikasi.`);
+    }
+
+    if (action === 'restore') {
+      if (body.telegram.telegram_chat_id) {
+        await sendMessage(
+          body.telegram.telegram_chat_id,
+          [
+            'Akun Budgetin kamu sudah dipulihkan admin.',
+            '',
+            'Kamu bisa memakai Telegram dan dashboard web lagi.',
+            webAppUrl,
+          ].join('\n'),
+        ).catch(() => null);
+      }
+
+      return sendMessage(chatId, `User ${body.user.phone_number || telegramUserId} sudah dipulihkan.`);
     }
 
     if (body.telegram.telegram_chat_id) {

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Budgetin planning notes
+    url: https://github.com/scrita47-dotcom/project_budgetin
+    about: Gunakan issue untuk mencatat bug, fitur, security, dan checklist sebelum hosting.
