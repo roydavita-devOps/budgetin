@@ -17,6 +17,7 @@ const defaultBotCommands = [
 const adminBotCommands = [
   { command: 'admin', description: 'Menu admin Budgetin' },
   { command: 'admin_user', description: 'Lihat statistik user' },
+  { command: 'admin_pending', description: 'Lihat user belum verified' },
   { command: 'admin_ringkasan', description: 'Lihat ringkasan agregat' },
   { command: 'admin_verifikasi_user', description: 'Verifikasi user' },
   { command: 'admin_blokir_user', description: 'Blokir user' },
@@ -186,6 +187,11 @@ async function handleMessage(message) {
   if (['/admin_user', '/admin_users'].includes(command)) {
     if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return sendAdminUserStats(message);
+  }
+
+  if (['/admin_pending', '/admin_pending_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminPendingUsers(message, text);
   }
 
   if (['/admin_ringkasan', '/admin_summary'].includes(command)) {
@@ -390,6 +396,9 @@ function sendHelpMessage(chatId, account = null) {
         '/admin_user',
         'Lihat jumlah user terdaftar dan statusnya.',
         '',
+        '/admin_pending',
+        'Lihat user yang belum diverifikasi.',
+        '',
         '/admin_ringkasan',
         'Lihat ringkasan agregat tanpa detail transaksi user.',
       ]
@@ -433,6 +442,9 @@ function sendAdminHelp(chatId) {
       '',
       '/admin_user',
       'Lihat jumlah user terdaftar, verified, pending, blocked, deleted, dan aktif bulan ini.',
+      '',
+      '/admin_pending',
+      'Lihat user yang belum diverifikasi. Pakai /admin_pending 2 untuk halaman berikutnya.',
       '',
       '/admin_ringkasan',
       'Lihat jumlah transaksi dan ringkasan agregat. Nominal disembunyikan jika user aktif bulan ini kurang dari 5.',
@@ -1239,6 +1251,61 @@ async function sendAdminUserStats(message) {
         `User aktif bulan ini: ${formatNumber(data.active_users_this_month)}`,
       ].join('\n'),
     );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendAdminPendingUsers(message, text) {
+  const chatId = message.chat.id;
+  const page = parsePageNumber(text);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    const params = new URLSearchParams({
+      admin_telegram_user_id: String(message.from.id),
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const response = await fetch(`${backendUrl}/telegram/admin/pending-users?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil user pending');
+
+    if (!body.data.length) {
+      return sendMessage(chatId, page === 1 ? 'Tidak ada user yang menunggu verifikasi.' : `Tidak ada user pending di halaman ${page}.`);
+    }
+
+    const lines = [
+      `User belum verified - halaman ${page}`,
+      `Menampilkan data ${offset + 1}-${offset + body.data.length}.`,
+      '',
+      ...body.data.flatMap((user, index) => {
+        const number = offset + index + 1;
+        const name = user.display_name || user.first_name || '-';
+        const username = user.username ? `@${user.username}` : '-';
+        const joinedAt = user.created_at ? formatDateTime(user.created_at) : '-';
+        return [
+          `${number}. ${name}`,
+          `Nomor: ${user.phone_number || '-'}`,
+          `Username: ${username}`,
+          `Telegram ID: ${user.telegram_user_id}`,
+          `Daftar: ${joinedAt}`,
+          'Verifikasi:',
+          `/admin_verifikasi_user ${user.telegram_user_id}`,
+          'Blokir:',
+          `/admin_blokir_user ${user.telegram_user_id}`,
+          '',
+        ];
+      }),
+      body.pagination?.has_next_page
+        ? `Halaman berikutnya: /admin_pending ${page + 1}`
+        : 'Tidak ada halaman berikutnya.',
+    ];
+
+    return sendMessage(chatId, lines.join('\n'));
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
