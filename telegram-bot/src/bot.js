@@ -599,7 +599,14 @@ async function deleteTransaction(message, text) {
       String(chatId),
       cached.filter((item) => item.id !== transaction.id),
     );
-    return sendMessage(chatId, `Dihapus: ${labelType(body.type)} ${formatIdr(body.amount)} ${body.category_label}`);
+    return sendMessage(
+      chatId,
+      [
+        `Dihapus: ${labelType(body.type)} ${formatIdr(body.amount)} ${body.category_label}`,
+        '',
+        'Ketik /riwayat untuk melihat daftar terbaru.',
+      ].join('\n'),
+    );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -635,7 +642,14 @@ async function confirmDeleteTransactions(message, text) {
     );
     pendingDeleteTransactionsByChat.delete(String(chatId));
 
-    return sendMessage(chatId, `Selesai. ${deleted.length} transaksi sudah dihapus.`);
+    return sendMessage(
+      chatId,
+      [
+        `Selesai. ${deleted.length} transaksi sudah dihapus.`,
+        '',
+        'Ketik /riwayat untuk melihat daftar terbaru.',
+      ].join('\n'),
+    );
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
