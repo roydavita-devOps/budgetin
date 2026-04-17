@@ -18,10 +18,9 @@ const adminBotCommands = [
   { command: 'admin', description: 'Menu admin Budgetin' },
   { command: 'admin_user', description: 'Lihat statistik user' },
   { command: 'admin_pending', description: 'Lihat user belum verified' },
+  { command: 'admin_verified', description: 'Lihat user sudah verified' },
+  { command: 'admin_blocked', description: 'Lihat user diblokir' },
   { command: 'admin_ringkasan', description: 'Lihat ringkasan agregat' },
-  { command: 'admin_verifikasi_user', description: 'Verifikasi user' },
-  { command: 'admin_blokir_user', description: 'Blokir user' },
-  { command: 'admin_pulihkan_user', description: 'Pulihkan akun user' },
 ];
 
 let offset = 0;
@@ -192,6 +191,16 @@ async function handleMessage(message) {
   if (['/admin_pending', '/admin_pending_user'].includes(command)) {
     if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return sendAdminPendingUsers(message, text);
+  }
+
+  if (['/admin_verified', '/admin_verified_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminVerifiedUsers(message, text);
+  }
+
+  if (['/admin_blocked', '/admin_blocked_user'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminBlockedUsers(message, text);
   }
 
   if (['/admin_ringkasan', '/admin_summary'].includes(command)) {
@@ -399,6 +408,12 @@ function sendHelpMessage(chatId, account = null) {
         '/admin_pending',
         'Lihat user yang belum diverifikasi.',
         '',
+        '/admin_verified',
+        'Lihat user yang sudah aktif.',
+        '',
+        '/admin_blocked',
+        'Lihat user yang diblokir.',
+        '',
         '/admin_ringkasan',
         'Lihat ringkasan agregat tanpa detail transaksi user.',
       ]
@@ -446,20 +461,19 @@ function sendAdminHelp(chatId) {
       '/admin_pending',
       'Lihat user yang belum diverifikasi. Pakai /admin_pending 2 untuk halaman berikutnya.',
       '',
+      '/admin_verified',
+      'Lihat user yang sudah aktif. Command blokir muncul di daftar ini.',
+      '',
+      '/admin_blocked',
+      'Lihat user yang sedang diblokir. Command verifikasi ulang muncul di daftar ini.',
+      '',
       '/admin_ringkasan',
       'Lihat jumlah transaksi dan ringkasan agregat. Nominal disembunyikan jika user aktif bulan ini kurang dari 5.',
       '',
-      '/admin_verifikasi_user TELEGRAM_ID',
-      'Verifikasi user baru.',
-      '',
-      '/admin_blokir_user TELEGRAM_ID',
-      'Blokir user bermasalah.',
-      '',
-      '/admin_pulihkan_user TELEGRAM_ID',
-      'Pulihkan akun yang dinonaktifkan dalam masa recovery.',
-      '',
       'Catatan privacy:',
       'Admin tidak melihat riwayat transaksi detail milik user.',
+      '',
+      'Command verifikasi, blokir, dan pulihkan hanya muncul di konteks daftar user yang sesuai.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
@@ -1302,6 +1316,112 @@ async function sendAdminPendingUsers(message, text) {
       }),
       body.pagination?.has_next_page
         ? `Halaman berikutnya: /admin_pending ${page + 1}`
+        : 'Tidak ada halaman berikutnya.',
+    ];
+
+    return sendMessage(chatId, lines.join('\n'));
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendAdminVerifiedUsers(message, text) {
+  const chatId = message.chat.id;
+  const page = parsePageNumber(text);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    const params = new URLSearchParams({
+      admin_telegram_user_id: String(message.from.id),
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const response = await fetch(`${backendUrl}/telegram/admin/verified-users?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil user verified');
+
+    if (!body.data.length) {
+      return sendMessage(chatId, page === 1 ? 'Belum ada user yang sudah verified.' : `Tidak ada user verified di halaman ${page}.`);
+    }
+
+    const lines = [
+      `User verified - halaman ${page}`,
+      `Menampilkan data ${offset + 1}-${offset + body.data.length}.`,
+      '',
+      ...body.data.flatMap((user, index) => {
+        const number = offset + index + 1;
+        const name = user.display_name || user.first_name || '-';
+        const username = user.username ? `@${user.username}` : '-';
+        const verifiedAt = user.verified_at ? formatDateTime(user.verified_at) : '-';
+        return [
+          `${number}. ${name}`,
+          `Nomor: ${user.phone_number || '-'}`,
+          `Username: ${username}`,
+          `Telegram ID: ${user.telegram_user_id}`,
+          `Verified: ${verifiedAt}`,
+          'Blokir:',
+          `/admin_blokir_user ${user.telegram_user_id}`,
+          '',
+        ];
+      }),
+      body.pagination?.has_next_page
+        ? `Halaman berikutnya: /admin_verified ${page + 1}`
+        : 'Tidak ada halaman berikutnya.',
+    ];
+
+    return sendMessage(chatId, lines.join('\n'));
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
+}
+
+async function sendAdminBlockedUsers(message, text) {
+  const chatId = message.chat.id;
+  const page = parsePageNumber(text);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  try {
+    const params = new URLSearchParams({
+      admin_telegram_user_id: String(message.from.id),
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const response = await fetch(`${backendUrl}/telegram/admin/blocked-users?${params.toString()}`, {
+      headers: { 'x-bot-token': botInternalToken },
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil user blocked');
+
+    if (!body.data.length) {
+      return sendMessage(chatId, page === 1 ? 'Tidak ada user yang sedang diblokir.' : `Tidak ada user blocked di halaman ${page}.`);
+    }
+
+    const lines = [
+      `User diblokir - halaman ${page}`,
+      `Menampilkan data ${offset + 1}-${offset + body.data.length}.`,
+      '',
+      ...body.data.flatMap((user, index) => {
+        const number = offset + index + 1;
+        const name = user.display_name || user.first_name || '-';
+        const username = user.username ? `@${user.username}` : '-';
+        const blockedAt = user.blocked_at ? formatDateTime(user.blocked_at) : '-';
+        return [
+          `${number}. ${name}`,
+          `Nomor: ${user.phone_number || '-'}`,
+          `Username: ${username}`,
+          `Telegram ID: ${user.telegram_user_id}`,
+          `Diblokir: ${blockedAt}`,
+          'Verifikasi ulang:',
+          `/admin_verifikasi_user ${user.telegram_user_id}`,
+          '',
+        ];
+      }),
+      body.pagination?.has_next_page
+        ? `Halaman berikutnya: /admin_blocked ${page + 1}`
         : 'Tidak ada halaman berikutnya.',
     ];
 
