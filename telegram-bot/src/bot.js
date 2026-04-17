@@ -583,8 +583,8 @@ async function deleteTransaction(message, text) {
         '',
         escapeHtml(formatTransactions(selectedTransactions, 0)),
         '',
-        'Kalau yakin, copy command ini dalam 2 menit:',
-        `<code>/konfirmasi_hapus ${escapeHtml(selectedNumbers.join(','))}</code>`,
+        'Kalau yakin, copy command di bawah ini dalam 2 menit:',
+        `<pre>/konfirmasi_hapus ${escapeHtml(selectedNumbers.join(','))}</pre>`,
       ].join('\n'),
     );
   }
