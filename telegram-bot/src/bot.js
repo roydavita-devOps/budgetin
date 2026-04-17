@@ -836,13 +836,13 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
   const code = request.request_code;
   const title = existingMessage || 'Permintaan hapus akun dibuat.';
 
-  return sendHtmlMessage(
+  return sendMessage(
     chatId,
     [
-      escapeHtml(title),
+      title,
       '',
       'Kode konfirmasi:',
-      `<code>${escapeHtml(code)}</code>`,
+      code,
       '',
       'Data kamu belum dihapus.',
       '',
@@ -853,7 +853,7 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
       'Lanjutkan hanya jika kamu sadar dan yakin.',
       '',
       'Copy command ini untuk konfirmasi:',
-      `<code>/konfirmasi_hapus_akun ${escapeHtml(code)}</code>`,
+      `/konfirmasi_hapus_akun ${code}`,
     ].join('\n'),
   );
 }
@@ -897,15 +897,15 @@ async function updateAccountDeletionRequest(message, text, action) {
       first_name: message.from.first_name || '',
     });
 
-    return sendHtmlMessage(
+    return sendMessage(
       chatId,
       [
         'Akun Budgetin kamu sudah dinonaktifkan sekarang.',
         '',
         'Kode request:',
-        `<code>${escapeHtml(body.request.request_code)}</code>`,
+        body.request.request_code,
         '',
-        `Admin masih bisa recovery sampai ${escapeHtml(formatDateTime(body.user.delete_recovery_until))}.`,
+        `Admin masih bisa recovery sampai ${formatDateTime(body.user.delete_recovery_until)}.`,
         'Jika ini tidak sengaja, segera hubungi admin Budgetin.',
       ].join('\n'),
     );
@@ -920,19 +920,19 @@ async function notifyAdminsAboutDeletionRequest(request, admins) {
     'Permintaan hapus data baru.',
     '',
     'Kode:',
-    `<code>${escapeHtml(request.request_code)}</code>`,
-    `Jenis: ${escapeHtml(deletionTypeLabel(request.request_type))}`,
-    `User: ${escapeHtml(request.user_display_name || '-')}`,
-    `Nomor: ${escapeHtml(request.user_phone_number || '-')}`,
+    request.request_code,
+    `Jenis: ${deletionTypeLabel(request.request_type)}`,
+    `User: ${request.user_display_name || '-'}`,
+    `Nomor: ${request.user_phone_number || '-'}`,
     '',
     'Setujui:',
-    `<code>/admin_setujui_hapus ${escapeHtml(request.request_code)}</code>`,
+    `/admin_setujui_hapus ${request.request_code}`,
     '',
     'Tolak:',
-    `<code>/admin_tolak_hapus ${escapeHtml(request.request_code)}</code>`,
+    `/admin_tolak_hapus ${request.request_code}`,
   ].join('\n');
 
-  await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
 }
 
 async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramProfile) {
@@ -946,19 +946,19 @@ async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramPr
   const text = [
     'User menonaktifkan akun Budgetin.',
     '',
-    `Nama: ${escapeHtml(user?.display_name || firstName || '-')}`,
-    `Username: ${escapeHtml(username)}`,
-    `Nomor: ${escapeHtml(user?.phone_number || '-')}`,
-    `Telegram ID: ${escapeHtml(telegramUserId)}`,
-    `Kode request: ${escapeHtml(request?.request_code || '-')}`,
+    `Nama: ${user?.display_name || firstName || '-'}`,
+    `Username: ${username}`,
+    `Nomor: ${user?.phone_number || '-'}`,
+    `Telegram ID: ${telegramUserId}`,
+    `Kode request: ${request?.request_code || '-'}`,
     '',
-    `Recovery sampai: ${escapeHtml(recoveryUntil)}`,
+    `Recovery sampai: ${recoveryUntil}`,
     '',
     'Pulihkan akun:',
-    `<code>/admin_pulihkan_user ${escapeHtml(telegramUserId)}</code>`,
+    `/admin_pulihkan_user ${telegramUserId}`,
   ].join('\n');
 
-  await Promise.all([...uniqueChatIds].map((adminChatId) => sendHtmlMessage(adminChatId, text).catch(() => null)));
+  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
 }
 
 async function notifyAdminsAboutNewUser(user, admins, telegramProfile) {
@@ -1479,17 +1479,6 @@ async function telegram(method, payload) {
 
 async function sendMessage(chatId, text, extra = {}) {
   return telegram('sendMessage', { chat_id: chatId, text, ...extra });
-}
-
-async function sendHtmlMessage(chatId, text, extra = {}) {
-  return sendMessage(chatId, text, { parse_mode: 'HTML', ...extra });
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
 }
 
 function wait(ms) {
