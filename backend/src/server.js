@@ -976,6 +976,85 @@ app.get('/telegram/admin/pending-users', botInternalRequired, async (req, res) =
   });
 });
 
+app.get('/telegram/admin/users', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const status = normalizeInput(req.query.status);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 20);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+
+  const statusConfig = {
+    pending: {
+      where: 'u.is_admin = FALSE AND u.is_verified = FALSE AND u.is_blocked = FALSE AND u.is_deleted = FALSE',
+      extraSelect: 'u.created_at, NULL::timestamptz AS verified_at, NULL::timestamptz AS blocked_at, NULL::timestamptz AS deleted_at, NULL::timestamptz AS delete_recovery_until',
+      orderBy: 'u.created_at ASC',
+    },
+    verified: {
+      where: 'u.is_admin = FALSE AND u.is_verified = TRUE AND u.is_blocked = FALSE AND u.is_deleted = FALSE',
+      extraSelect: 'u.created_at, u.verified_at, NULL::timestamptz AS blocked_at, NULL::timestamptz AS deleted_at, NULL::timestamptz AS delete_recovery_until',
+      orderBy: 'u.verified_at DESC NULLS LAST, u.created_at DESC',
+    },
+    blocked: {
+      where: 'u.is_admin = FALSE AND u.is_blocked = TRUE AND u.is_deleted = FALSE',
+      extraSelect: 'u.created_at, u.verified_at, u.blocked_at, NULL::timestamptz AS deleted_at, NULL::timestamptz AS delete_recovery_until',
+      orderBy: 'u.blocked_at DESC NULLS LAST, u.created_at DESC',
+    },
+    nonaktif: {
+      where: 'u.is_admin = FALSE AND u.is_deleted = TRUE',
+      extraSelect: 'u.created_at, u.verified_at, u.blocked_at, u.deleted_at, u.delete_recovery_until',
+      orderBy: 'u.deleted_at DESC NULLS LAST, u.created_at DESC',
+    },
+  };
+
+  const config = statusConfig[status];
+  if (!config) {
+    return res.status(400).json({ error: 'status must be pending, verified, blocked, or nonaktif' });
+  }
+
+  const result = await query(
+    `SELECT
+       u.id,
+       u.phone_number,
+       u.display_name,
+       ${config.extraSelect},
+       ta.telegram_user_id,
+       ta.telegram_chat_id,
+       ta.username,
+       ta.first_name
+     FROM users u
+     JOIN telegram_accounts ta ON ta.user_id = u.id
+     WHERE ${config.where}
+     ORDER BY ${config.orderBy}
+     LIMIT $1
+     OFFSET $2`,
+    [limit + 1, offset],
+  );
+
+  const rows = result.rows.slice(0, limit);
+  res.json({
+    data: rows.map((row) => ({
+      id: row.id,
+      phone_number: row.phone_number,
+      display_name: row.display_name,
+      created_at: row.created_at,
+      verified_at: row.verified_at,
+      blocked_at: row.blocked_at,
+      deleted_at: row.deleted_at,
+      delete_recovery_until: row.delete_recovery_until,
+      telegram_user_id: row.telegram_user_id,
+      telegram_chat_id: row.telegram_chat_id,
+      username: row.username,
+      first_name: row.first_name,
+    })),
+    pagination: {
+      limit,
+      offset,
+      has_next_page: result.rows.length > limit,
+    },
+  });
+});
+
 app.get('/telegram/admin/verified-users', botInternalRequired, async (req, res) => {
   const admin = await requireAdminTelegramUser(req, res);
   if (!admin) return;
