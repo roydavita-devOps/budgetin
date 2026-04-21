@@ -334,6 +334,10 @@ async function sendStartMessage(message) {
           ? 'Dashboard lengkap sudah aktif.'
           : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
         '',
+        'Privasi kamu aman:',
+        '- Admin tidak dapat melihat detail transaksi harian kamu',
+        '- Admin hanya melihat status akun dan ringkasan sistem',
+        '',
         'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
       ].join('\n'),
         { reply_markup: { remove_keyboard: true } },
@@ -354,6 +358,10 @@ async function sendStartMessage(message) {
     '/gaji april 7000000',
     '',
     'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
+    '',
+    'Privasi kamu aman:',
+    '- Admin tidak dapat melihat detail transaksi harian kamu',
+    '- Admin hanya melihat status akun dan ringkasan sistem',
     '',
     'Untuk melihat dashboard, filter, export, dan laporan lengkap, buka web Budgetin:',
     webAppUrl,
@@ -453,9 +461,6 @@ function sendAdminHelp(chatId) {
       '',
       '/admin_ringkasan',
       'Lihat jumlah transaksi dan ringkasan agregat. Nominal disembunyikan jika user aktif bulan ini kurang dari 5.',
-      '',
-      'Catatan privacy:',
-      'Admin tidak melihat riwayat transaksi detail milik user.',
       '',
       'Command verifikasi, blokir, dan pulihkan hanya muncul di konteks daftar user yang sesuai.',
     ].join('\n'),
@@ -1255,6 +1260,7 @@ async function sendAdminUserStats(message) {
 }
 
 async function sendAdminUserMenu(message, text) {
+  const chatId = message.chat.id;
   const args = text.trim().split(/\s+/).slice(1);
   const status = normalizeAdminStatus(args[0]);
 
@@ -1263,7 +1269,21 @@ async function sendAdminUserMenu(message, text) {
     return sendAdminUserList(message, status, page);
   }
 
-  return sendAdminUserStats(message);
+  return sendMessage(
+    chatId,
+    [
+      'Pusat daftar user admin',
+      '',
+      'Pilih daftar yang ingin dilihat:',
+      '/admin_user pending',
+      '/admin_user verified',
+      '/admin_user blocked',
+      '/admin_user nonaktif',
+      '',
+      'Contoh halaman berikutnya:',
+      '/admin_user pending 2',
+    ].join('\n'),
+  );
 }
 
 async function sendAdminUserList(message, status, page = 1) {
@@ -1318,11 +1338,29 @@ async function sendAdminPlatformSummary(message) {
 
     const data = body.data;
     const lines = [
-      'Ringkasan agregat Budgetin',
+      'Ringkasan admin Budgetin',
       '',
-      `Total transaksi: ${formatNumber(data.total_transactions)}`,
-      `Transaksi bulan ini: ${formatNumber(data.transactions_this_month)}`,
+      'User:',
+      `Total akun: ${formatNumber(data.total_users)}`,
+      `User biasa: ${formatNumber(data.regular_users)}`,
+      `Pending verifikasi: ${formatNumber(data.pending_users)}`,
+      `Verified: ${formatNumber(data.verified_users)}`,
+      `Diblokir: ${formatNumber(data.blocked_users)}`,
+      `Dinonaktifkan: ${formatNumber(data.deleted_users)}`,
+      `User baru hari ini: ${formatNumber(data.new_users_today)}`,
+      `User baru minggu ini: ${formatNumber(data.new_users_this_week)}`,
+      '',
+      'Aktivitas:',
+      `User aktif hari ini: ${formatNumber(data.active_users_today)}`,
+      `User aktif minggu ini: ${formatNumber(data.active_users_this_week)}`,
       `User aktif bulan ini: ${formatNumber(data.active_users_this_month)}`,
+      `Transaksi hari ini: ${formatNumber(data.transactions_today)}`,
+      `Transaksi minggu ini: ${formatNumber(data.transactions_this_week)}`,
+      `Transaksi bulan ini: ${formatNumber(data.transactions_this_month)}`,
+      '',
+      'Perhatian:',
+      `Verified tapi belum pernah transaksi: ${formatNumber(data.verified_without_transactions)}`,
+      `Akun sedang masa recovery: ${formatNumber(data.recovering_users)}`,
     ];
 
     if (!data.can_show_money) {

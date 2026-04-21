@@ -1159,10 +1159,27 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
   if (!admin) return;
 
   const threshold = 5;
+  const userStats = await query(
+    `SELECT
+       COUNT(*)::int AS total_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE)::int AS regular_users,
+       COUNT(*) FILTER (WHERE is_admin = TRUE)::int AS admin_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_verified = TRUE AND is_blocked = FALSE AND is_deleted = FALSE)::int AS verified_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_verified = FALSE AND is_blocked = FALSE AND is_deleted = FALSE)::int AS pending_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_blocked = TRUE AND is_deleted = FALSE)::int AS blocked_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND is_deleted = TRUE)::int AS deleted_users,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND created_at >= CURRENT_DATE)::int AS new_users_today,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND created_at >= NOW() - INTERVAL '7 days')::int AS new_users_this_week
+     FROM users`,
+  );
   const counts = await query(
     `SELECT
+       COUNT(*) FILTER (WHERE t.created_at >= CURRENT_DATE)::int AS transactions_today,
+       COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days')::int AS transactions_this_week,
        COUNT(*)::int AS total_transactions,
        COUNT(*) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS transactions_this_month,
+       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= CURRENT_DATE)::int AS active_users_today,
+       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days')::int AS active_users_this_week,
        COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS active_users_this_month
      FROM transactions t
      JOIN users u ON u.id = t.user_id
@@ -1170,7 +1187,29 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
        AND u.is_deleted = FALSE`,
   );
 
-  const base = counts.rows[0];
+  const attention = await query(
+    `SELECT
+       COUNT(*) FILTER (
+         WHERE u.is_admin = FALSE
+           AND u.is_verified = TRUE
+           AND u.is_blocked = FALSE
+           AND u.is_deleted = FALSE
+           AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.user_id = u.id)
+       )::int AS verified_without_transactions,
+       COUNT(*) FILTER (
+         WHERE u.is_admin = FALSE
+           AND u.is_deleted = TRUE
+           AND u.delete_recovery_until IS NOT NULL
+           AND u.delete_recovery_until > NOW()
+       )::int AS recovering_users
+     FROM users u`,
+  );
+
+  const base = {
+    ...userStats.rows[0],
+    ...counts.rows[0],
+    ...attention.rows[0],
+  };
   const canShowMoney = Number(base.active_users_this_month) >= threshold;
   if (!canShowMoney) {
     return res.json({
