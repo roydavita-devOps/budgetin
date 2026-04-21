@@ -1,7 +1,0 @@
-oke mari kita berdiskusi tentang project ini , untuk next step sebelum user memakai program ini
-mereka harus register terlebih dahulu , register hanya perlu pakai nomor telpon yang memiliki telegram dan authentikasinya cukup menggunakan OTP.
-
-setelah itu setiap user yang sudah teregister , saat login memiliki dashboard masing-masing 
-dashboard tersebut terintegrasi dengan tele setiap user secara private.
-
-apakah hal ini memungkinkan?

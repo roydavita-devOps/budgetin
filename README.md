@@ -2,6 +2,16 @@
 
 Financial tracker app untuk mencatat pemasukan dan pengeluaran melalui web dashboard dan Telegram bot.
 
+## Documentation
+
+Dokumen perencanaan dan produk sudah dipisah ke folder `docs/`:
+
+- [docs/overview.md](x:/PROJECT%20MANDIRI/budgetin/docs/overview.md)
+- [docs/auth-and-telegram.md](x:/PROJECT%20MANDIRI/budgetin/docs/auth-and-telegram.md)
+- [docs/categories-and-export.md](x:/PROJECT%20MANDIRI/budgetin/docs/categories-and-export.md)
+- [docs/roadmap.md](x:/PROJECT%20MANDIRI/budgetin/docs/roadmap.md)
+- [docs/commercialization.md](x:/PROJECT%20MANDIRI/budgetin/docs/commercialization.md)
+
 ## Run Locally
 
 ```bash
