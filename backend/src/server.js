@@ -354,6 +354,25 @@ function categoryLabel(code) {
   return CATEGORY_LABELS[code] || code;
 }
 
+function formatExportDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}/${map.month}/${map.day} ${map.hour}:${map.minute}:${map.second}`;
+}
+
 function normalizeCategory(type, category) {
   const normalized = normalizeInput(category).replace(/_/g, ' ');
   const available = CATEGORY_DEFINITIONS[type] || [];
@@ -530,7 +549,7 @@ async function buildTransactionsCsv(userId, queryParams) {
     header.join(','),
     ...result.rows.map((row) =>
       [
-        row.created_at.toISOString(),
+        formatExportDate(row.created_at),
         row.type,
         row.category,
         categoryLabel(row.category),

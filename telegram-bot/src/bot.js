@@ -3,7 +3,7 @@ import 'dotenv/config';
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
-const webAppUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
+const webAppUrl = process.env.WEB_APP_URL || 'https://budgetin.seni.my.id/';
 
 const defaultBotCommands = [
   { command: 'mulai', description: 'Mulai dan hubungkan akun' },
@@ -352,6 +352,9 @@ async function sendStartMessage(message) {
     '',
     'Budgetin membantu kamu mencatat pemasukan dan pengeluaran harian lewat Telegram.',
     '',
+    'Langkah pertama:',
+    'Tekan tombol Share Phone Number di bawah ini untuk menghubungkan Telegram kamu.',
+    '',
     'Setelah akun terhubung, kamu bisa langsung catat transaksi seperti ini:',
     '',
     '/makan nasi padang 18000',
@@ -365,9 +368,6 @@ async function sendStartMessage(message) {
     '',
     'Untuk melihat dashboard, filter, export, dan laporan lengkap, buka web Budgetin:',
     webAppUrl,
-    '',
-    'Langkah pertama:',
-    'Tekan tombol Share Phone Number di bawah ini untuk menghubungkan Telegram kamu.',
     '',
     'Setelah terhubung, ketik /bantuan untuk melihat menu yang tersedia.',
   ]);
