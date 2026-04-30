@@ -26,6 +26,33 @@ Services:
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
 
+## Environment
+
+`.env.example` adalah template. `.env` adalah nilai runtime yang dipakai `docker compose` di mesin local atau server. Daftar key harus sinkron, tetapi secret asli hanya boleh ada di `.env`.
+
+Ringkasan key penting:
+
+- `JWT_SECRET`: secret JWT backend
+- `ADMIN_PHONE_NUMBER`: nomor admin utama untuk flow verifikasi dan moderation
+- `REFRESH_TOKEN_TTL_DAYS`: masa berlaku refresh token dalam hari
+- `REFRESH_COOKIE_NAME`: nama cookie refresh token
+- `COOKIE_SECURE`: gunakan `true` untuk production HTTPS, `false` untuk local HTTP
+- `CORS_ORIGIN`: daftar origin web yang diizinkan, pisahkan dengan koma
+- `NEXT_PUBLIC_API_URL`: base path API yang dipakai frontend
+- `API_INTERNAL_URL`: URL internal backend untuk proxy frontend dan bot
+- `WEB_APP_URL`: URL dashboard yang dikirim Telegram bot ke user
+- `TELEGRAM_BOT_TOKEN`: token bot Telegram
+- `BOT_INTERNAL_TOKEN`: token internal backend <-> telegram bot
+- `CLOUDFLARE_TUNNEL_TOKEN`: token Cloudflare Tunnel
+
+Untuk production Budgetin yang sudah live di HTTPS, gunakan:
+
+```env
+COOKIE_SECURE=true
+WEB_APP_URL=https://budgetin.seni.my.id/
+CORS_ORIGIN=http://localhost:3000,https://budgetin.seni.my.id
+```
+
 ## Telegram Bot
 
 Isi `TELEGRAM_BOT_TOKEN` di `.env`, lalu jalankan compose. Command utama:

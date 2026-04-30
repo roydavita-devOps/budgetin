@@ -39,6 +39,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://budgetin:budgetin_password@postgres:5432/budgetin}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
+      ADMIN_PHONE_NUMBER: ${ADMIN_PHONE_NUMBER:-081390195600}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
       REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-budgetin_refresh_token}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
