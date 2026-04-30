@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || '/api';
 const storageKey = 'budgetin_session';
@@ -163,6 +163,7 @@ export default function Home() {
   const [theme, setTheme] = useState(null);
   const [themeReady, setThemeReady] = useState(false);
   const [activeSection, setActiveSection] = useState('dashboard');
+  const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
   const isDeleted = Boolean(token && user?.is_deleted);
@@ -186,15 +187,81 @@ export default function Home() {
   const balance = periodTotals.income - periodTotals.expense;
   const currentSection = sidebarItems.find((item) => item.id === activeSection) || sidebarItems[0];
 
+  async function clearSession(message = 'Session berakhir. Silakan login ulang.') {
+    localStorage.removeItem(storageKey);
+    setToken('');
+    setUser(null);
+    setTransactions([]);
+    setOtpCode('');
+    setAuthMessage(message);
+  }
+
+  async function refreshSession() {
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    refreshPromiseRef.current = (async () => {
+      try {
+        const response = await fetch(`${apiUrl}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.error || 'Refresh gagal');
+        }
+
+        setUser(body.user);
+        setToken(body.token);
+        localStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
+        return body;
+      } catch {
+        await clearSession();
+        return null;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    return refreshPromiseRef.current;
+  }
+
   async function request(path, options = {}) {
+    const { skipRefresh = false, ...fetchOptions } = options;
     const response = await fetch(`${apiUrl}${path}`, {
-      ...options,
+      ...fetchOptions,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        ...(options.headers || {}),
+        ...(fetchOptions.headers || {}),
       },
     });
-    const body = await response.json();
+
+    const body = await response.json().catch(() => ({}));
+    const shouldTryRefresh = response.status === 401
+      && !skipRefresh
+      && token
+      && !['/auth/request-otp', '/auth/verify-otp', '/auth/refresh', '/auth/logout'].includes(path);
+
+    if (shouldTryRefresh) {
+      const refreshed = await refreshSession();
+      if (refreshed?.token) {
+        return request(path, {
+          ...options,
+          skipRefresh: true,
+          headers: {
+            ...(fetchOptions.headers || {}),
+            Authorization: `Bearer ${refreshed.token}`,
+          },
+        });
+      }
+    }
+
     if (!response.ok) {
       const error = new Error(body.error || 'Request failed');
       error.code = body.code;
@@ -255,9 +322,21 @@ export default function Home() {
     if (exportFilters.type) params.set('type', exportFilters.type);
     if (exportFilters.category) params.set('category', exportFilters.category);
 
-    const response = await fetch(`${apiUrl}/exports/transactions.csv?${params.toString()}`, {
-      headers,
+    let exportHeaders = headers;
+    let response = await fetch(`${apiUrl}/exports/transactions.csv?${params.toString()}`, {
+      headers: exportHeaders,
+      credentials: 'include',
     });
+    if (response.status === 401) {
+      const refreshed = await refreshSession();
+      if (refreshed?.token) {
+        exportHeaders = { Authorization: `Bearer ${refreshed.token}` };
+        response = await fetch(`${apiUrl}/exports/transactions.csv?${params.toString()}`, {
+          headers: exportHeaders,
+          credentials: 'include',
+        });
+      }
+    }
     if (!response.ok) throw new Error('Export gagal');
 
     const blob = await response.blob();
@@ -271,7 +350,20 @@ export default function Home() {
     window.URL.revokeObjectURL(url);
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await fetch(`${apiUrl}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+    } catch {
+      // Logout tetap membersihkan sesi lokal walau revoke gagal.
+    }
+
     localStorage.removeItem(storageKey);
     setToken('');
     setUser(null);
@@ -315,13 +407,7 @@ export default function Home() {
         setUser(body.user);
         localStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
       })
-      .catch(() => {
-        localStorage.removeItem(storageKey);
-        setToken('');
-        setUser(null);
-        setTransactions([]);
-        setAuthMessage('Session berakhir. Silakan login ulang.');
-      });
+      .catch(() => clearSession());
   }, [token]);
 
   useEffect(() => {

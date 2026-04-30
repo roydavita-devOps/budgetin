@@ -14,6 +14,9 @@ const jwtSecret = process.env.JWT_SECRET || 'development_secret';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || '';
 const adminPhoneNumber = normalizePhone(process.env.ADMIN_PHONE_NUMBER || '081390195600');
+const refreshTokenTtlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS || 14);
+const refreshCookieName = process.env.REFRESH_COOKIE_NAME || 'budgetin_refresh_token';
+const refreshCookieSecure = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
 
 const CATEGORY_DEFINITIONS = {
   expense: [
@@ -29,9 +32,20 @@ const CATEGORY_DEFINITIONS = {
 
 const CATEGORY_OPTIONS = Object.values(CATEGORY_DEFINITIONS).flat();
 const CATEGORY_LABELS = Object.fromEntries(CATEGORY_OPTIONS.map((category) => [category.code, category.label]));
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : [];
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*' }));
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || corsOrigins.length === 0 || corsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Origin not allowed by CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 const redis = createClient({ url: process.env.REDIS_URL });
@@ -51,8 +65,101 @@ function signToken(user) {
       is_deleted: user.is_deleted,
     },
     jwtSecret,
-    { expiresIn: '7d' },
+    { expiresIn: '1h' },
   );
+}
+
+function parseCookies(cookieHeader = '') {
+  return Object.fromEntries(
+    String(cookieHeader)
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const separatorIndex = part.indexOf('=');
+        if (separatorIndex === -1) return [part, ''];
+        return [part.slice(0, separatorIndex), decodeURIComponent(part.slice(separatorIndex + 1))];
+      }),
+  );
+}
+
+function generateRefreshToken() {
+  return crypto.randomBytes(48).toString('hex');
+}
+
+function hashRefreshToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function setRefreshTokenCookie(res, token, expiresAt) {
+  const expiresDate = new Date(expiresAt);
+  const parts = [
+    `${refreshCookieName}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Expires=${expiresDate.toUTCString()}`,
+    `Max-Age=${Math.max(0, Math.floor((expiresDate.getTime() - Date.now()) / 1000))}`,
+  ];
+  if (refreshCookieSecure) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearRefreshTokenCookie(res) {
+  const parts = [
+    `${refreshCookieName}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    'Max-Age=0',
+  ];
+  if (refreshCookieSecure) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+async function revokeRefreshToken(refreshToken) {
+  if (!refreshToken) return;
+  await query(
+    `UPDATE refresh_tokens
+     SET revoked_at = COALESCE(revoked_at, NOW()), last_used_at = NOW()
+     WHERE token_hash = $1`,
+    [hashRefreshToken(refreshToken)],
+  );
+}
+
+async function createRefreshTokenForUser(userId) {
+  const refreshToken = generateRefreshToken();
+  const result = await query(
+    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+     VALUES ($1, $2, NOW() + ($3::int * INTERVAL '1 day'))
+     RETURNING expires_at`,
+    [userId, hashRefreshToken(refreshToken), refreshTokenTtlDays],
+  );
+  return {
+    token: refreshToken,
+    expiresAt: result.rows[0].expires_at,
+  };
+}
+
+async function cleanupRefreshTokens() {
+  await query(
+    `DELETE FROM refresh_tokens
+     WHERE expires_at <= NOW()
+        OR revoked_at IS NOT NULL`,
+  );
+}
+
+async function issueAuthSession(res, user, previousRefreshToken = '') {
+  if (previousRefreshToken) {
+    await revokeRefreshToken(previousRefreshToken);
+  }
+  const refreshSession = await createRefreshTokenForUser(user.id);
+  setRefreshTokenCookie(res, refreshSession.token, refreshSession.expiresAt);
+  return {
+    user,
+    token: signToken(user),
+  };
 }
 
 function authRequired(req, res, next) {
@@ -311,6 +418,17 @@ async function ensureDatabaseSchema() {
       purpose TEXT NOT NULL DEFAULT 'login',
       expires_at TIMESTAMPTZ NOT NULL,
       consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      last_used_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -624,7 +742,7 @@ app.post('/auth/register', async (req, res) => {
     );
     const user = result.rows[0];
     await seedDefaultCategories(user.id);
-    return res.status(201).json({ user, token: signToken(user) });
+    return res.status(201).json(await issueAuthSession(res, user));
   } catch (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'email already registered' });
     throw error;
@@ -641,8 +759,8 @@ app.post('/auth/login', async (req, res) => {
     return res.status(401).json({ error: 'invalid credentials' });
   }
 
-  return res.json({
-    user: {
+  return res.json(
+    await issueAuthSession(res, {
       id: user.id,
       email: user.email,
       phone_number: user.phone_number,
@@ -656,9 +774,8 @@ app.post('/auth/login', async (req, res) => {
       deleted_at: user.deleted_at,
       delete_recovery_until: user.delete_recovery_until,
       created_at: user.created_at,
-    },
-    token: signToken(user),
-  });
+    }),
+  );
 });
 
 app.post('/auth/request-otp', async (req, res) => {
@@ -717,7 +834,59 @@ app.post('/auth/verify-otp', async (req, res) => {
   const user = userResult.rows[0];
   await seedDefaultCategories(user.id);
 
-  return res.json({ user, token: signToken(user) });
+  return res.json(await issueAuthSession(res, user));
+});
+
+app.post('/auth/refresh', async (req, res) => {
+  const cookies = parseCookies(req.headers.cookie || '');
+  const refreshToken = cookies[refreshCookieName];
+  if (!refreshToken) {
+    clearRefreshTokenCookie(res);
+    return res.status(401).json({ error: 'Refresh token tidak tersedia' });
+  }
+
+  const result = await query(
+    `SELECT
+       rt.id AS refresh_token_id,
+       rt.user_id,
+       u.id,
+       u.email,
+       u.phone_number,
+       u.display_name,
+       u.is_admin,
+       u.is_verified,
+       u.is_blocked,
+       u.is_deleted,
+       u.verified_at,
+       u.blocked_at,
+       u.deleted_at,
+       u.delete_recovery_until,
+       u.created_at
+     FROM refresh_tokens rt
+     JOIN users u ON u.id = rt.user_id
+     WHERE rt.token_hash = $1
+       AND rt.revoked_at IS NULL
+       AND rt.expires_at > NOW()
+     LIMIT 1`,
+    [hashRefreshToken(refreshToken)],
+  );
+
+  const user = result.rows[0];
+  if (!user) {
+    await revokeRefreshToken(refreshToken);
+    clearRefreshTokenCookie(res);
+    return res.status(401).json({ error: 'Refresh token tidak valid atau sudah kedaluwarsa' });
+  }
+
+  await query('UPDATE refresh_tokens SET last_used_at = NOW() WHERE id = $1', [user.refresh_token_id]);
+  return res.json(await issueAuthSession(res, user, refreshToken));
+});
+
+app.post('/auth/logout', async (req, res) => {
+  const cookies = parseCookies(req.headers.cookie || '');
+  await revokeRefreshToken(cookies[refreshCookieName]);
+  clearRefreshTokenCookie(res);
+  return res.json({ success: true });
 });
 
 app.get('/me', authRequired, async (req, res) => {
@@ -1656,9 +1825,13 @@ ensureDatabaseSchema()
       console.log(`Budgetin API listening on ${port}`);
     });
     processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
+    cleanupRefreshTokens().catch((error) => console.error('Refresh token cleanup failed:', error.message));
     setInterval(() => {
       processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
     }, 60_000);
+    setInterval(() => {
+      cleanupRefreshTokens().catch((error) => console.error('Refresh token cleanup failed:', error.message));
+    }, 60 * 60 * 1000);
   })
   .catch((error) => {
     console.error('Failed to prepare database schema:', error);
