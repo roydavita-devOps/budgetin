@@ -188,7 +188,7 @@ export default function Home() {
   const currentSection = sidebarItems.find((item) => item.id === activeSection) || sidebarItems[0];
 
   async function clearSession(message = 'Session berakhir. Silakan login ulang.') {
-    localStorage.removeItem(storageKey);
+    sessionStorage.removeItem(storageKey);
     setToken('');
     setUser(null);
     setTransactions([]);
@@ -218,7 +218,7 @@ export default function Home() {
 
         setUser(body.user);
         setToken(body.token);
-        localStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
+        sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
         return body;
       } catch {
         await clearSession();
@@ -292,7 +292,7 @@ export default function Home() {
       });
       setUser(body.user);
       setToken(body.token);
-      localStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
+      sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
       setAuthMessage('Login berhasil.');
     } catch (error) {
       setAuthMessage(error.message);
@@ -364,7 +364,7 @@ export default function Home() {
       // Logout tetap membersihkan sesi lokal walau revoke gagal.
     }
 
-    localStorage.removeItem(storageKey);
+    sessionStorage.removeItem(storageKey);
     setToken('');
     setUser(null);
     setTransactions([]);
@@ -385,7 +385,7 @@ export default function Home() {
   }, [theme]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(storageKey);
+    const saved = sessionStorage.getItem(storageKey);
     if (!saved) return;
 
     try {
@@ -395,7 +395,7 @@ export default function Home() {
       setUser(session.user || null);
       setAuthMessage('Session dipulihkan.');
     } catch {
-      localStorage.removeItem(storageKey);
+      sessionStorage.removeItem(storageKey);
     }
   }, []);
 
@@ -405,7 +405,7 @@ export default function Home() {
     request('/me', { headers })
       .then((body) => {
         setUser(body.user);
-        localStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
+        sessionStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
       })
       .catch(() => clearSession());
   }, [token]);

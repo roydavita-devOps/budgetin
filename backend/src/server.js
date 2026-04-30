@@ -92,14 +92,11 @@ function hashRefreshToken(token) {
 }
 
 function setRefreshTokenCookie(res, token, expiresAt) {
-  const expiresDate = new Date(expiresAt);
   const parts = [
     `${refreshCookieName}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
-    `Expires=${expiresDate.toUTCString()}`,
-    `Max-Age=${Math.max(0, Math.floor((expiresDate.getTime() - Date.now()) / 1000))}`,
   ];
   if (refreshCookieSecure) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
