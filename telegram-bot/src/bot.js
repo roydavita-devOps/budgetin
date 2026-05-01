@@ -4,6 +4,7 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 const webAppUrl = process.env.WEB_APP_URL || 'https://budgetin.seni.my.id/';
+const pollingTimeoutSeconds = Math.max(1, Number(process.env.TELEGRAM_POLL_TIMEOUT_SECONDS || 10));
 
 const defaultBotCommands = [
   { command: 'mulai', description: 'Mulai dan hubungkan akun' },
@@ -35,18 +36,19 @@ if (!token) {
 }
 
 async function poll() {
-  console.log('Budgetin Telegram bot started.');
+      console.log('Budgetin Telegram bot started.');
   await setupBotCommands();
   while (true) {
     try {
-      const updates = await telegram('getUpdates', { timeout: 25, offset });
+      const updates = await telegram('getUpdates', { timeout: pollingTimeoutSeconds, offset });
       for (const update of updates.result || []) {
         offset = update.update_id + 1;
         if (update.message?.contact) await handleContact(update.message);
         if (update.message?.text) await handleMessage(update.message);
       }
     } catch (error) {
-      console.error('Polling error:', error.message);
+      const detail = error.cause?.message ? ` (${error.cause.message})` : '';
+      console.error('Polling error:', `${error.message}${detail}`);
       await wait(3000);
     }
   }
@@ -338,6 +340,9 @@ async function sendStartMessage(message) {
         '- Admin tidak dapat melihat detail transaksi harian kamu',
         '- Admin hanya melihat status akun dan ringkasan sistem',
         '',
+        'Admin Budgetin:',
+        '081390195600',
+        '',
         'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
       ].join('\n'),
         { reply_markup: { remove_keyboard: true } },
@@ -365,6 +370,9 @@ async function sendStartMessage(message) {
     'Privasi kamu aman:',
     '- Admin tidak dapat melihat detail transaksi harian kamu',
     '- Admin hanya melihat status akun dan ringkasan sistem',
+    '',
+    'Admin Budgetin:',
+    '081390195600',
     '',
     'Untuk melihat dashboard, filter, export, dan laporan lengkap, buka web Budgetin:',
     webAppUrl,
@@ -444,6 +452,9 @@ function sendHelpMessage(chatId, account = null) {
       'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
       'Contoh benar: /makan nasi padang 18000',
       '',
+      'Admin Budgetin: 081390195600',
+      `Web Budgetin: ${webAppUrl}`,
+      '',
       'Jika belum terdaftar, ketik /mulai lalu tekan Share Phone Number.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
@@ -501,7 +512,10 @@ function sendViewHelp(chatId) {
       'Mau lihat apa?',
       '',
       '/ringkasan',
-      'Lihat total pemasukan, pengeluaran, dan saldo.',
+      'Lihat total pemasukan, pengeluaran, dan saldo di bulan berjalan.',
+      '',
+      '/ringkasan 2026-05',
+      'Lihat ringkasan untuk bulan tertentu.',
       '',
       '/riwayat',
       'Lihat riwayat transaksi per 10 data. Bot akan memberi pilihan halaman.',
@@ -1390,7 +1404,12 @@ async function sendAdminPlatformSummary(message) {
 async function sendSummary(message) {
   const chatId = message.chat.id;
   try {
-    const params = new URLSearchParams({ telegram_user_id: String(message.from.id) });
+    const parts = message.text.trim().split(/\s+/);
+    const requestedMonth = /^\d{4}-\d{2}$/.test(parts[1] || '') ? parts[1] : currentMonthValue();
+    const params = new URLSearchParams({
+      telegram_user_id: String(message.from.id),
+      month: requestedMonth,
+    });
     const response = await fetch(`${backendUrl}/telegram/summary?${params.toString()}`, {
       headers: { 'x-bot-token': botInternalToken },
     });
@@ -1398,10 +1417,12 @@ async function sendSummary(message) {
     if (!response.ok) throw new Error(body.error || 'Gagal mengambil summary');
 
     const { income, expense, balance } = body.data;
+    const period = monthLabel(requestedMonth);
     return sendMessage(
       chatId,
       [
         'Ringkasan Budgetin',
+        `Periode: ${period}`,
         `Pemasukan: ${formatIdr(income)}`,
         `Pengeluaran: ${formatIdr(expense)}`,
         `Saldo: ${formatIdr(balance)}`,
@@ -1833,12 +1854,20 @@ function exportMonthMenuMessage() {
 }
 
 async function telegram(method, payload) {
+  const requestTimeoutMs = method === 'getUpdates'
+    ? (Number(payload?.timeout || pollingTimeoutSeconds) + 10) * 1000
+    : 15_000;
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(requestTimeoutMs),
   });
-  return response.json();
+  const body = await response.json();
+  if (!response.ok || body?.ok === false) {
+    throw new Error(body?.description || `Telegram API error ${response.status}`);
+  }
+  return body;
 }
 
 async function sendMessage(chatId, text, extra = {}) {
@@ -1847,6 +1876,20 @@ async function sendMessage(chatId, text, extra = {}) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function currentMonthValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(value) {
+  const [year, month] = String(value || '').split('-');
+  if (!year || !month) return 'Bulan ini';
+  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString('id-ID', {
+    month: 'long',
+    year: 'numeric',
+  });
 }
 
 function formatIdr(value) {

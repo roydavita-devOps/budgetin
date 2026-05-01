@@ -316,6 +316,18 @@ export default function Home() {
     setTransactions(transactionBody.data);
   }
 
+  async function deleteTransaction(itemId) {
+    if (!token) return;
+    const confirmed = window.confirm('Hapus transaksi ini?');
+    if (!confirmed) return;
+
+    await request(`/transactions/${itemId}`, {
+      method: 'DELETE',
+      headers,
+    });
+    setTransactions((current) => current.filter((item) => item.id !== itemId));
+  }
+
   async function exportCsv() {
     if (!token) return;
     const params = new URLSearchParams({ month: exportFilters.month });
@@ -661,9 +673,17 @@ export default function Home() {
                       <p className="heading-text font-semibold tracking-tight">{item.category_label || item.category}</p>
                       <p className="muted-text mt-1 text-sm leading-6">{item.note || '-'} - {new Date(item.created_at).toLocaleString('id-ID')}</p>
                     </div>
-                    <p className={item.type === 'income' ? 'brand-text text-right font-bold' : 'danger-text text-right font-bold'}>
-                      {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
-                    </p>
+                    <div className="flex items-center justify-end gap-3">
+                      <p className={item.type === 'income' ? 'brand-text text-right font-bold' : 'danger-text text-right font-bold'}>
+                        {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
+                      </p>
+                      <button
+                        className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
+                        onClick={() => deleteTransaction(item.id)}
+                      >
+                        Hapus
+                      </button>
+                    </div>
                   </div>
                 ))}
                 {!filteredTransactions.length && (

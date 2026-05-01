@@ -614,28 +614,33 @@ function sanitizeFilenamePart(value) {
     .replace(/^-+|-+$/g, '');
 }
 
-async function getSummaryForUser(userId) {
-  const cacheKey = `summary:${userId}`;
+async function getSummaryForUser(userId, queryParams = {}) {
+  const normalizedMonth = /^\d{4}-\d{2}$/.test(normalizeInput(queryParams.month))
+    ? normalizeInput(queryParams.month)
+    : '';
+  const cacheKey = `summary:${userId}:${normalizedMonth || 'all'}`;
   const cached = await redis.get(cacheKey).catch(() => null);
   if (cached) return JSON.parse(cached).data;
 
+  const { where, params } = buildTransactionFilters(userId, queryParams);
+
   const totals = await query(
-    `SELECT
-       COALESCE(SUM(amount) FILTER (WHERE type = 'income'), 0)::float AS income,
-       COALESCE(SUM(amount) FILTER (WHERE type = 'expense'), 0)::float AS expense
-     FROM transactions
-     WHERE user_id = $1`,
-    [userId],
+     `SELECT
+        COALESCE(SUM(amount) FILTER (WHERE type = 'income'), 0)::float AS income,
+        COALESCE(SUM(amount) FILTER (WHERE type = 'expense'), 0)::float AS expense
+      FROM transactions
+      WHERE ${where}`,
+    params,
   );
 
   const byCategory = await query(
     `SELECT category, type, SUM(amount)::float AS total
      FROM transactions
-     WHERE user_id = $1
+     WHERE ${where}
      GROUP BY category, type
      ORDER BY total DESC
      LIMIT 10`,
-    [userId],
+    params,
   );
 
   const summary = {
@@ -1065,7 +1070,7 @@ app.get('/telegram/summary', botInternalRequired, async (req, res) => {
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;
 
-  res.json({ data: await getSummaryForUser(user.id) });
+  res.json({ data: await getSummaryForUser(user.id, req.query) });
 });
 
 app.get('/telegram/exports/transactions.csv', botInternalRequired, async (req, res) => {
