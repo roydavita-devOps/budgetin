@@ -147,6 +147,12 @@ async function cleanupRefreshTokens() {
   );
 }
 
+async function invalidateSummaryCache(userId) {
+  const cacheKeys = await redis.keys(`summary:${userId}:*`).catch(() => []);
+  if (!cacheKeys.length) return;
+  await redis.del(cacheKeys).catch(() => {});
+}
+
 async function issueAuthSession(res, user, previousRefreshToken = '') {
   if (previousRefreshToken) {
     await revokeRefreshToken(previousRefreshToken);
@@ -532,7 +538,36 @@ async function createTransactionForUser(userId, body) {
     [userId, type, amount, category, note],
   );
 
-  await redis.del(`summary:${userId}`).catch(() => {});
+  await invalidateSummaryCache(userId);
+  return { data: withCategoryLabels(result.rows)[0] };
+}
+
+async function updateTransactionForUser(userId, transactionId, body) {
+  const parsed = validateTransaction(body);
+  if (parsed.error) return { error: parsed.error };
+
+  const { type, amount, category, note } = parsed.value;
+  await query(
+    `INSERT INTO categories (user_id, name)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, name) DO NOTHING`,
+    [userId, category],
+  );
+
+  const result = await query(
+    `UPDATE transactions
+     SET type = $3,
+       amount = $4,
+       category = $5,
+       note = $6
+     WHERE id = $1
+       AND user_id = $2
+     RETURNING id, type, amount::float AS amount, category, note, created_at`,
+    [transactionId, userId, type, amount, category, note],
+  );
+
+  if (!result.rows[0]) return { error: 'Transaksi tidak ditemukan', status: 404 };
+  await invalidateSummaryCache(userId);
   return { data: withCategoryLabels(result.rows)[0] };
 }
 
@@ -541,6 +576,7 @@ function buildTransactionFilters(userId, queryParams) {
   const filters = ['user_id = $1'];
   const type = queryParams.type === 'income' || queryParams.type === 'expense' ? queryParams.type : '';
   const category = normalizeInput(queryParams.category).replace(/\s+/g, '_');
+  const search = normalizeInput(queryParams.search);
   const month = normalizeInput(queryParams.month);
   const date = normalizeInput(queryParams.date);
   const dateFrom = normalizeInput(queryParams.date_from);
@@ -554,6 +590,23 @@ function buildTransactionFilters(userId, queryParams) {
   if (category && CATEGORY_LABELS[category]) {
     params.push(category);
     filters.push(`category = $${params.length}`);
+  }
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    filters.push(`(
+      LOWER(COALESCE(note, '')) LIKE $${params.length}
+      OR LOWER(REPLACE(category, '_', ' ')) LIKE $${params.length}
+      OR LOWER(
+        CASE category
+          ${CATEGORY_OPTIONS.map((item, index) => `WHEN '${item.code}' THEN $${params.length + index + 1}`).join(' ')}
+          ELSE category
+        END
+      ) LIKE $${params.length}
+    )`);
+    for (const item of CATEGORY_OPTIONS) {
+      params.push(item.label.toLowerCase());
+    }
   }
 
   if (/^\d{4}-\d{2}$/.test(month)) {
@@ -1046,7 +1099,7 @@ app.delete('/telegram/transactions', botInternalRequired, async (req, res) => {
     [user.id],
   );
 
-  await redis.del(`summary:${user.id}`).catch(() => {});
+  await invalidateSummaryCache(user.id);
   res.json({ deleted_count: result.rowCount });
 });
 
@@ -1062,7 +1115,7 @@ app.delete('/telegram/transactions/:id', botInternalRequired, async (req, res) =
   );
 
   if (!result.rows[0]) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
-  await redis.del(`summary:${user.id}`).catch(() => {});
+  await invalidateSummaryCache(user.id);
   res.json({ data: withCategoryLabels(result.rows)[0] });
 });
 
@@ -1656,7 +1709,7 @@ app.patch('/telegram/deletion-requests/:code', botInternalRequired, async (req, 
      RETURNING ${userReturnFields}`,
     [user.id],
   );
-  await redis.del(`summary:${user.id}`).catch(() => {});
+  await invalidateSummaryCache(user.id);
 
   res.json({
     request: deletionRequestPublicFields(processed.rows[0]),
@@ -1708,7 +1761,7 @@ app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async 
         [deletionRequest.user_id],
       );
       deletedCount = deleteResult.rowCount;
-      await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
+      await invalidateSummaryCache(deletionRequest.user_id);
     } else {
       const deleteResult = await query('DELETE FROM transactions WHERE user_id = $1 RETURNING id', [deletionRequest.user_id]);
       deletedCount = deleteResult.rowCount;
@@ -1771,6 +1824,12 @@ app.post('/transactions', authRequired, webFeatureRequired, async (req, res) => 
   res.status(201).json(result);
 });
 
+app.patch('/transactions/:id', authRequired, webFeatureRequired, async (req, res) => {
+  const result = await updateTransactionForUser(req.user.id, req.params.id, req.body);
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  res.json(result);
+});
+
 app.delete('/transactions/:id', authRequired, webFeatureRequired, async (req, res) => {
   const result = await query(
     `DELETE FROM transactions
@@ -1780,7 +1839,7 @@ app.delete('/transactions/:id', authRequired, webFeatureRequired, async (req, re
   );
 
   if (!result.rows[0]) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
-  await redis.del(`summary:${req.user.id}`).catch(() => {});
+  await invalidateSummaryCache(req.user.id);
   res.json({ data: withCategoryLabels(result.rows)[0] });
 });
 

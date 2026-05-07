@@ -158,11 +158,13 @@ export default function Home() {
   const [transactions, setTransactions] = useState([]);
   const [period, setPeriod] = useState('daily');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
-  const [filters, setFilters] = useState({ type: '', category: '', sort: 'newest' });
+  const [filters, setFilters] = useState({ type: '', category: '', sort: 'newest', search: '' });
   const [exportFilters, setExportFilters] = useState({ month: currentMonthValue(), type: '', category: '' });
   const [theme, setTheme] = useState(null);
   const [themeReady, setThemeReady] = useState(false);
   const [activeSection, setActiveSection] = useState('dashboard');
+  const [editingTransaction, setEditingTransaction] = useState(null);
+  const [editForm, setEditForm] = useState({ type: 'expense', amount: '', category: '', note: '' });
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -175,9 +177,13 @@ export default function Home() {
     return transactions.filter((item) => {
       if (filters.type && item.type !== filters.type) return false;
       if (filters.category && item.category !== filters.category) return false;
+      if (filters.search) {
+        const haystack = `${item.category_label || item.category} ${item.note || ''}`.toLowerCase();
+        if (!haystack.includes(filters.search.toLowerCase())) return false;
+      }
       return true;
     });
-  }, [transactions, filters.type, filters.category]);
+  }, [transactions, filters.type, filters.category, filters.search]);
 
   const periodTotals = useMemo(() => summarizeTransactions(transactions), [transactions]);
   const filteredTotals = useMemo(() => summarizeTransactions(filteredTransactions), [filteredTransactions]);
@@ -311,9 +317,41 @@ export default function Home() {
       sort: filters.sort,
       month: selectedMonth,
     });
+    if (filters.search.trim()) params.set('search', filters.search.trim());
 
     const transactionBody = await request(`/transactions?${params.toString()}`, { headers });
     setTransactions(transactionBody.data);
+  }
+
+  function startEditTransaction(item) {
+    setEditingTransaction(item);
+    setEditForm({
+      type: item.type,
+      amount: String(Number(item.amount || 0)),
+      category: item.category,
+      note: item.note || '',
+    });
+  }
+
+  function cancelEditTransaction() {
+    setEditingTransaction(null);
+    setEditForm({ type: 'expense', amount: '', category: '', note: '' });
+  }
+
+  async function saveTransactionEdit() {
+    if (!editingTransaction) return;
+    const body = await request(`/transactions/${editingTransaction.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        type: editForm.type,
+        amount: Number(editForm.amount),
+        category: editForm.category,
+        note: editForm.note,
+      }),
+    });
+    setTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
+    cancelEditTransaction();
   }
 
   async function deleteTransaction(itemId) {
@@ -424,7 +462,7 @@ export default function Home() {
 
   useEffect(() => {
     loadData().catch(console.error);
-  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, filters.sort]);
+  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, filters.sort, filters.search]);
 
   function toggleTheme() {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
@@ -647,6 +685,12 @@ export default function Home() {
                   <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatNumber(filteredTotals.count)} transaksi</p>
                 </div>
                 <div className="mt-6 grid gap-3 md:grid-cols-3">
+                  <input
+                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md md:col-span-3"
+                    placeholder="Cari catatan atau kategori"
+                    value={filters.search}
+                    onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+                  />
                   <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value, category: '' })}>
                     <option value="">Semua tipe</option>
                     <option value="income">Pemasukan</option>
@@ -666,6 +710,35 @@ export default function Home() {
                   </select>
                 </div>
               </div>
+              {editingTransaction ? (
+                <div className="border-b border-[var(--border)] px-6 pb-6 sm:px-8">
+                  <div className="surface-soft rounded-[20px] p-5">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="heading-text text-lg font-semibold tracking-tight">Edit transaksi</h3>
+                        <p className="muted-text text-sm">Perbarui data yang salah input tanpa hapus transaksi.</p>
+                      </div>
+                      <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code })}>
+                        <option value="income">Pemasukan</option>
+                        <option value="expense">Pengeluaran</option>
+                      </select>
+                      <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
+                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })}>
+                        {categories[editForm.type].map((category) => (
+                          <option key={category.code} value={category.code}>{category.label}</option>
+                        ))}
+                      </select>
+                      <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
+                    </div>
+                    <div className="mt-4 flex justify-end">
+                      <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={saveTransactionEdit}>Simpan perubahan</button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <div className="px-3 pb-3 sm:px-4 sm:pb-4">
                 {filteredTransactions.map((item) => (
                   <div key={item.id} className="grid gap-3 rounded-2xl p-4 transition-all duration-200 ease-out hover:bg-[var(--row-hover)] hover:shadow-sm sm:grid-cols-[1fr_auto] sm:items-center">
@@ -677,6 +750,12 @@ export default function Home() {
                       <p className={item.type === 'income' ? 'brand-text text-right font-bold' : 'danger-text text-right font-bold'}>
                         {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
                       </p>
+                      <button
+                        className="soft-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
+                        onClick={() => startEditTransaction(item)}
+                      >
+                        Edit
+                      </button>
                       <button
                         className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
                         onClick={() => deleteTransaction(item.id)}
