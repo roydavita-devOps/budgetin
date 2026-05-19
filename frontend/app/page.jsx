@@ -1171,14 +1171,19 @@ function StatusPanel({ title, children, tone = 'default' }) {
 
 function InlineStat({ label, value, tone = 'default' }) {
   const toneClass = tone === 'success'
-    ? 'bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]'
+    ? 'bg-[color-mix(in_srgb,var(--primary)_12%,var(--surface))] border-[color-mix(in_srgb,var(--primary)_18%,transparent)]'
     : tone === 'danger'
-      ? 'bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]'
-      : 'bg-[color-mix(in_srgb,var(--surface-soft)_55%,transparent)]';
+      ? 'bg-[color-mix(in_srgb,var(--danger)_12%,var(--surface))] border-[color-mix(in_srgb,var(--danger)_18%,transparent)]'
+      : 'bg-[color-mix(in_srgb,var(--surface-soft)_55%,var(--surface))] border-transparent';
+  const labelClass = tone === 'success'
+    ? 'brand-text'
+    : tone === 'danger'
+      ? 'danger-text'
+      : 'muted-text';
   return (
-    <div className={`rounded-2xl p-4 ${toneClass}`}>
-      <p className="text-xs font-medium uppercase tracking-[0.08em] text-white/75">{label}</p>
-      <p className="mt-2 text-lg font-semibold tracking-tight text-white">{value}</p>
+    <div className={`rounded-2xl border p-4 ${toneClass}`}>
+      <p className={`text-xs font-medium uppercase tracking-[0.08em] ${labelClass}`}>{label}</p>
+      <p className="heading-text mt-2 text-lg font-semibold tracking-tight">{value}</p>
     </div>
   );
 }
