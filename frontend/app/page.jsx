@@ -107,6 +107,24 @@ function groupByCategory(transactions, type) {
   return [...grouped.values()].sort((a, b) => b.total - a.total);
 }
 
+function groupBySubcategory(transactions, type, category) {
+  const grouped = new Map();
+  transactions
+    .filter((item) => item.type === type && item.category === category)
+    .forEach((item) => {
+      const key = item.subcategory || '__default__';
+      const current = grouped.get(key) || {
+        key,
+        label: item.subcategory || 'Tanpa subkategori',
+        total: 0,
+      };
+      current.total += Number(item.amount || 0);
+      grouped.set(key, current);
+    });
+
+  return [...grouped.values()].sort((a, b) => b.total - a.total);
+}
+
 function buildTrend(transactions, period) {
   const grouped = new Map();
 
@@ -168,6 +186,7 @@ export default function Home() {
   const [customCategories, setCustomCategories] = useState([]);
   const [categoryForm, setCategoryForm] = useState({ type: 'expense', parent_category: 'food_drink', name: '' });
   const [categoryMessage, setCategoryMessage] = useState('');
+  const [subcategoryView, setSubcategoryView] = useState({ type: 'expense', category: 'food_drink' });
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -195,6 +214,11 @@ export default function Home() {
   const trend = useMemo(() => buildTrend(transactions, period), [transactions, period]);
   const balance = periodTotals.income - periodTotals.expense;
   const currentSection = sidebarItems.find((item) => item.id === activeSection) || sidebarItems[0];
+  const subcategorySummary = useMemo(() => {
+    return groupBySubcategory(transactions, subcategoryView.type, subcategoryView.category);
+  }, [transactions, subcategoryView.type, subcategoryView.category]);
+  const selectedCategoryMeta = categoryMeta[subcategoryView.category];
+  const selectedCategoryTotal = subcategorySummary.reduce((sum, item) => sum + item.total, 0);
   const customCategoryGroups = useMemo(() => {
     return customCategories.reduce((groups, item) => {
       const key = `${item.type}:${item.parent_category}`;
@@ -744,6 +768,93 @@ export default function Home() {
               <div className="grid gap-6 2xl:grid-cols-2">
                 <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." />
                 <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." />
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <div className="space-y-2">
+                    <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
+                    <p className="muted-text text-sm leading-6">Pilih kategori utama dulu. Detail subkategori baru muncul setelah itu, supaya tampilan tetap ringan untuk user.</p>
+                  </div>
+                  <div className="mt-6 space-y-4">
+                    <div className="surface-soft inline-grid grid-cols-2 gap-2 rounded-2xl p-1 shadow-sm">
+                      {[
+                        ['expense', 'Pengeluaran'],
+                        ['income', 'Pemasukan'],
+                      ].map(([value, label]) => (
+                        <button
+                          key={value}
+                          className={subcategoryView.type === value ? 'rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 ease-out' : 'muted-text rounded-xl px-4 py-2 text-sm font-semibold transition-colors duration-200 ease-out hover:bg-[var(--surface)] hover:text-[var(--text-primary)]'}
+                          onClick={() => setSubcategoryView({ type: value, category: categories[value][0].code })}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid gap-2">
+                      {categories[subcategoryView.type].map((category) => {
+                        const isActive = subcategoryView.category === category.code;
+                        return (
+                          <button
+                            key={category.code}
+                            className={isActive ? 'surface-soft flex items-center justify-between rounded-2xl border border-[var(--primary)] px-4 py-3 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex items-center justify-between rounded-2xl px-4 py-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
+                            onClick={() => setSubcategoryView({ type: subcategoryView.type, category: category.code })}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="h-3 w-3 rounded-full" style={{ background: category.color }} />
+                              <div>
+                                <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{category.label}</p>
+                                <p className="muted-text mt-1 text-xs">{subcategoryView.type === 'income' ? 'Detail pemasukan' : 'Detail pengeluaran'}</p>
+                              </div>
+                            </div>
+                            <span className="muted-text text-xs">{formatCurrency(groupBySubcategory(transactions, subcategoryView.type, category.code).reduce((sum, item) => sum + item.total, 0))}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 className="heading-text text-xl font-semibold tracking-tight">
+                        {selectedCategoryMeta?.label || 'Kategori'}
+                      </h2>
+                      <p className="muted-text mt-1 text-sm leading-6">
+                        {subcategorySummary.length ? 'Rincian subkategori pada kategori yang dipilih.' : 'Belum ada subkategori atau transaksi pada kategori ini.'}
+                      </p>
+                    </div>
+                    <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
+                  </div>
+                  <div className="mt-6 grid gap-3">
+                    {subcategorySummary.length ? subcategorySummary.map((item) => {
+                      const percentage = selectedCategoryTotal ? (item.total / selectedCategoryTotal) * 100 : 0;
+                      return (
+                        <div key={item.key} className="surface-soft rounded-2xl p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="heading-text text-sm font-semibold">{item.label}</p>
+                            <p className="heading-text text-sm font-semibold">{formatCurrency(item.total)}</p>
+                          </div>
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${percentage}%`,
+                                background: selectedCategoryMeta?.color || 'var(--primary)',
+                              }}
+                            />
+                          </div>
+                          <p className="muted-text mt-2 text-xs">{percentage.toFixed(0)}% dari {selectedCategoryMeta?.label || 'kategori ini'}</p>
+                        </div>
+                      );
+                    }) : (
+                      <div className="surface-soft rounded-2xl p-5">
+                        <p className="muted-text text-sm">Belum ada detail yang bisa ditampilkan.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
