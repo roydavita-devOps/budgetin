@@ -187,6 +187,7 @@ export default function Home() {
   const [categoryForm, setCategoryForm] = useState({ type: 'expense', parent_category: 'food_drink', name: '' });
   const [categoryMessage, setCategoryMessage] = useState('');
   const [subcategoryView, setSubcategoryView] = useState({ type: 'expense', category: 'food_drink' });
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -231,6 +232,7 @@ export default function Home() {
   const editSubcategoryOptions = useMemo(() => {
     return customCategories.filter((item) => item.type === editForm.type && item.parent_category === editForm.category);
   }, [customCategories, editForm.type, editForm.category]);
+  const modalCategoryList = customCategoryGroups.get(`${categoryForm.type}:${categoryForm.parent_category}`) || [];
 
   async function clearSession(message = 'Session berakhir. Silakan login ulang.') {
     sessionStorage.removeItem(storageKey);
@@ -564,6 +566,16 @@ export default function Home() {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   }
 
+  function openCategoryModal() {
+    setCategoryMessage('');
+    setIsCategoryModalOpen(true);
+  }
+
+  function closeCategoryModal() {
+    setCategoryMessage('');
+    setIsCategoryModalOpen(false);
+  }
+
   function selectSection(sectionId) {
     setActiveSection(sectionId);
   }
@@ -772,9 +784,12 @@ export default function Home() {
 
               <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
                 <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="space-y-2">
-                    <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
-                    <p className="muted-text text-sm leading-6">Pilih kategori utama dulu. Detail subkategori baru muncul setelah itu, supaya tampilan tetap ringan untuk user.</p>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-2">
+                      <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
+                      <p className="muted-text text-sm leading-6">Pilih kategori utama dulu. Detail subkategori baru muncul setelah itu, supaya tampilan tetap ringan untuk user.</p>
+                    </div>
+                    <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola subkategori</button>
                   </div>
                   <div className="mt-6 space-y-4">
                     <div className="surface-soft inline-grid grid-cols-2 gap-2 rounded-2xl p-1 shadow-sm">
@@ -852,89 +867,6 @@ export default function Home() {
                       <div className="surface-soft rounded-2xl p-5">
                         <p className="muted-text text-sm">Belum ada detail yang bisa ditampilkan.</p>
                       </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="space-y-2">
-                    <h2 className="heading-text text-xl font-semibold tracking-tight">Subkategori custom</h2>
-                    <p className="muted-text text-sm leading-6">Kategori utama tetap mengikuti struktur Budgetin. Subkategori ini hanya menambah detail di bawah kategori utama.</p>
-                  </div>
-                  <div className="mt-6 grid gap-4">
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <select
-                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
-                        value={categoryForm.type}
-                        onChange={(event) => {
-                          const nextType = event.target.value;
-                          const nextParent = categories[nextType][0].code;
-                          setCategoryForm({ type: nextType, parent_category: nextParent, name: '' });
-                        }}
-                      >
-                        <option value="expense">Pengeluaran</option>
-                        <option value="income">Pemasukan</option>
-                      </select>
-                      <select
-                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
-                        value={categoryForm.parent_category}
-                        onChange={(event) => setCategoryForm({ ...categoryForm, parent_category: event.target.value })}
-                      >
-                        {categories[categoryForm.type].map((category) => (
-                          <option key={category.code} value={category.code}>{category.label}</option>
-                        ))}
-                      </select>
-                      <input
-                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
-                        value={categoryForm.name}
-                        onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
-                        placeholder="Contoh: Kopi"
-                        maxLength={40}
-                      />
-                    </div>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="muted-text text-sm">Maksimal 10 subkategori per kategori utama.</p>
-                      <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah subkategori</button>
-                    </div>
-                    <p className="muted-text text-sm">{categoryMessage}</p>
-                  </div>
-                </div>
-
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="space-y-2">
-                    <h2 className="heading-text text-xl font-semibold tracking-tight">Daftar subkategori</h2>
-                    <p className="muted-text text-sm leading-6">Subkategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
-                  </div>
-                  <div className="mt-6 grid gap-5">
-                    {Object.entries(categories).flatMap(([type, list]) =>
-                      list.map((category) => {
-                        const key = `${type}:${category.code}`;
-                        const items = customCategoryGroups.get(key) || [];
-                        return (
-                          <div key={key} className="surface-soft rounded-2xl p-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="heading-text text-sm font-semibold">{category.label}</p>
-                                <p className="muted-text mt-1 text-xs">{type === 'income' ? 'Pemasukan' : 'Pengeluaran'}</p>
-                              </div>
-                              <span className="muted-text text-xs">{items.length}/10</span>
-                            </div>
-                            <div className="mt-4 grid gap-2">
-                              {items.length ? items.map((item) => (
-                                <div key={item.id} className="surface-card flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
-                                  <div>
-                                    <p className="heading-text text-sm font-semibold">{item.name}</p>
-                                    <p className="muted-text mt-1 text-xs">{new Date(item.created_at).toLocaleDateString('id-ID')}</p>
-                                  </div>
-                                  <button className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => removeCustomCategory(item.id)}>Hapus</button>
-                                </div>
-                              )) : <p className="muted-text text-sm">Belum ada subkategori custom.</p>}
-                            </div>
-                          </div>
-                        );
-                      }),
                     )}
                   </div>
                 </div>
@@ -1093,6 +1025,88 @@ export default function Home() {
           </footer>
         </div>
       </div>
+
+      {canViewDashboard && isCategoryModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="surface-card max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-[24px] shadow-[var(--shadow-md)]">
+            <div className="flex items-start justify-between gap-4 border-b border-[var(--border)] px-6 py-5 sm:px-8">
+              <div>
+                <h2 className="heading-text text-xl font-semibold tracking-tight">Kelola subkategori</h2>
+                <p className="muted-text mt-1 text-sm leading-6">Kategori utama tetap mengikuti struktur Budgetin. Subkategori menambah detail tanpa mengubah ringkasan utama.</p>
+              </div>
+              <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={closeCategoryModal}>Tutup</button>
+            </div>
+
+            <div className="grid max-h-[calc(90vh-88px)] gap-6 overflow-y-auto p-6 sm:p-8 xl:grid-cols-[0.95fr_1.05fr]">
+              <div className="grid gap-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <select
+                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                    value={categoryForm.type}
+                    onChange={(event) => {
+                      const nextType = event.target.value;
+                      const nextParent = categories[nextType][0].code;
+                      setCategoryForm({ type: nextType, parent_category: nextParent, name: '' });
+                    }}
+                  >
+                    <option value="expense">Pengeluaran</option>
+                    <option value="income">Pemasukan</option>
+                  </select>
+                  <select
+                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                    value={categoryForm.parent_category}
+                    onChange={(event) => setCategoryForm({ ...categoryForm, parent_category: event.target.value })}
+                  >
+                    {categories[categoryForm.type].map((category) => (
+                      <option key={category.code} value={category.code}>{category.label}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
+                    value={categoryForm.name}
+                    onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
+                    placeholder="Contoh: Kopi"
+                    maxLength={40}
+                  />
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="muted-text text-sm">Maksimal 10 subkategori per kategori utama.</p>
+                  <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah subkategori</button>
+                </div>
+                <p className="muted-text text-sm">{categoryMessage}</p>
+              </div>
+
+              <div className="grid gap-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="heading-text text-lg font-semibold tracking-tight">
+                      {categories[categoryForm.type].find((item) => item.code === categoryForm.parent_category)?.label || 'Daftar subkategori'}
+                    </h3>
+                    <p className="muted-text mt-1 text-sm">Subkategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
+                  </div>
+                  <span className="muted-text text-sm">{modalCategoryList.length}/10</span>
+                </div>
+
+                <div className="grid gap-3">
+                  {modalCategoryList.length ? modalCategoryList.map((item) => (
+                    <div key={item.id} className="surface-soft flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
+                      <div>
+                        <p className="heading-text text-sm font-semibold">{item.name}</p>
+                        <p className="muted-text mt-1 text-xs">{new Date(item.created_at).toLocaleDateString('id-ID')}</p>
+                      </div>
+                      <button className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => removeCustomCategory(item.id)}>Hapus</button>
+                    </div>
+                  )) : (
+                    <div className="surface-soft rounded-2xl p-5">
+                      <p className="muted-text text-sm">Belum ada subkategori custom untuk kategori ini.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
