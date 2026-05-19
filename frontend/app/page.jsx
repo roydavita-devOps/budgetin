@@ -743,7 +743,7 @@ export default function Home() {
 
           {canViewDashboard && activeSection === 'dashboard' ? (
             <>
-              <section className="surface-card rounded-[28px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+              <section className="surface-card rounded-[28px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="brand-text text-xs font-medium uppercase tracking-[0.08em]">Ringkasan periode aktif</p>
@@ -756,14 +756,14 @@ export default function Home() {
                     {monthLabel(selectedMonth)}
                   </div>
                 </div>
-                <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                <div className="mt-5 grid gap-3 sm:mt-6 sm:gap-4 sm:grid-cols-3">
                   <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} tone="success" />
                   <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
                   <InlineStat label="Transaksi" value={formatNumber(periodTotals.count)} />
                 </div>
               </section>
 
-              <section className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+              <section className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                   <div className="space-y-1">
                     <h2 className="heading-text text-xl font-semibold tracking-tight">Aktivitas transaksi</h2>
@@ -785,20 +785,20 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
-                <TrendChart data={trend} />
+                <TrendChart data={trend} period={period} />
               </section>
             </>
           ) : null}
 
           {canViewDashboard && activeSection === 'kategori' ? (
-            <section className="grid gap-6">
-              <div className="grid gap-6 2xl:grid-cols-2">
+            <section className="grid gap-5 sm:gap-6">
+              <div className="grid gap-5 sm:gap-6 2xl:grid-cols-2">
                 <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." />
                 <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." />
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+              <div className="grid gap-5 sm:gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                <div className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="space-y-2">
                       <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
@@ -806,7 +806,7 @@ export default function Home() {
                     </div>
                     <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola subkategori</button>
                   </div>
-                  <div className="mt-6 space-y-4">
+                  <div className="mt-5 space-y-4 sm:mt-6">
                     <div className="surface-soft inline-grid grid-cols-2 gap-2 rounded-2xl p-1 shadow-sm">
                       {[
                         ['expense', 'Pengeluaran'],
@@ -858,7 +858,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                <div className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <h2 className="heading-text text-xl font-semibold tracking-tight">
@@ -872,7 +872,7 @@ export default function Home() {
                       <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
                     </div>
                   </div>
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  <div className="mt-4 grid gap-3 sm:mt-5 sm:grid-cols-3">
                     <SummaryTile label="Total kategori" value={formatCurrency(selectedCategoryTotal)} accent="success" />
                     <SummaryTile label="Subkategori aktif" value={`${selectedCategorySubcategoryCount}`} />
                     <SummaryTile label="Porsi kategori" value={`${selectedCategoryShare}% dari ${subcategoryView.type === 'income' ? 'pemasukan' : 'pengeluaran'}`} />
@@ -1282,21 +1282,24 @@ function DonutChart({ title, items, emptyText }) {
     : 'var(--surface-soft) 0deg 360deg';
 
   return (
-    <div className="surface-card rounded-xl p-6 transition-shadow hover:shadow-md">
-      <h2 className="heading-text text-lg font-semibold">{title}</h2>
-      <div className="mt-5 grid gap-6 sm:grid-cols-[170px_1fr] sm:items-center">
+    <div className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="heading-text text-lg font-semibold">{title}</h2>
+        <span className="surface-soft muted-text rounded-full px-3 py-1 text-xs font-semibold">{items.length || 0} kategori</span>
+      </div>
+      <div className="mt-5 grid gap-5 sm:grid-cols-[156px_1fr] sm:items-center sm:gap-6">
         <div
-          className="mx-auto grid h-[170px] w-[170px] place-items-center rounded-full"
+          className="mx-auto grid h-[150px] w-[150px] place-items-center rounded-full sm:h-[170px] sm:w-[170px]"
           style={{ background: `conic-gradient(${gradient})` }}
           aria-label={title}
         >
-          <div className="surface-card heading-text grid h-[96px] w-[96px] place-items-center rounded-full text-center text-sm font-semibold">
+          <div className="surface-card heading-text grid h-[88px] w-[88px] place-items-center rounded-full text-center text-sm font-semibold sm:h-[96px] sm:w-[96px]">
             {total > 0 ? formatCurrency(total) : '0'}
           </div>
         </div>
-        <div className="space-y-4">
+        <div className="space-y-3 sm:space-y-4">
           {items.map((item) => (
-            <div key={item.category} className="grid gap-1">
+            <div key={item.category} className="surface-soft rounded-2xl p-3 sm:p-4">
               <div className="flex items-center justify-between gap-3">
                 <span className="muted-text flex items-center gap-2 text-sm">
                   <span className="h-3 w-3 rounded-full" style={{ background: item.color }} />
@@ -1304,7 +1307,7 @@ function DonutChart({ title, items, emptyText }) {
                 </span>
                 <span className="text-sm font-semibold">{formatCurrency(item.total)}</span>
               </div>
-              <div className="surface-soft h-2 overflow-hidden rounded">
+              <div className="surface-muted mt-3 h-2 overflow-hidden rounded-full">
                 <div className="h-full rounded" style={{ width: `${total ? (item.total / total) * 100 : 0}%`, background: item.color }} />
               </div>
             </div>
@@ -1316,19 +1319,28 @@ function DonutChart({ title, items, emptyText }) {
   );
 }
 
-function TrendChart({ data }) {
+function TrendChart({ data, period }) {
   const maxValue = Math.max(...data.flatMap((item) => [item.income, item.expense]), 1);
 
+  if (!data.length) {
+    return (
+      <div className="surface-soft mt-5 rounded-[20px] p-5 sm:mt-6 sm:p-6">
+        <p className="heading-text text-sm font-semibold">Belum ada aktivitas</p>
+        <p className="muted-text mt-2 text-sm">Grafik {periodLabel(period).toLowerCase()} akan muncul setelah ada transaksi di periode ini.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="surface-muted mt-6 rounded-xl p-4">
+    <div className="surface-muted mt-5 rounded-[20px] p-4 sm:mt-6 sm:p-5">
       <div className="muted-text flex flex-wrap items-center gap-5 text-sm">
         <span className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[var(--primary)]" />Pemasukan</span>
         <span className="flex items-center gap-2"><span className="h-3 w-3 rounded bg-[var(--danger)]" />Pengeluaran</span>
       </div>
-      <div className="surface-card mt-5 grid min-h-[260px] grid-flow-col items-end gap-4 overflow-x-auto rounded-xl px-4 pb-4 pt-6">
+      <div className="surface-card mt-4 grid min-h-[220px] grid-flow-col items-end gap-3 overflow-x-auto rounded-[20px] px-3 pb-3 pt-5 sm:mt-5 sm:min-h-[260px] sm:gap-4 sm:px-4 sm:pb-4 sm:pt-6">
         {data.map((item) => (
-          <div key={item.label} className="grid min-w-[64px] gap-2">
-            <div className="flex h-[170px] items-end justify-center gap-2">
+          <div key={item.label} className="grid min-w-[56px] gap-2 sm:min-w-[64px]">
+            <div className="flex h-[150px] items-end justify-center gap-2 sm:h-[170px]">
               <div className="w-5 rounded-t bg-[var(--primary)]" style={{ height: `${Math.max((item.income / maxValue) * 100, item.income ? 4 : 0)}%` }} title={`Pemasukan ${formatCurrency(item.income)}`} />
               <div className="w-5 rounded-t bg-[var(--danger)]" style={{ height: `${Math.max((item.expense / maxValue) * 100, item.expense ? 4 : 0)}%` }} title={`Pengeluaran ${formatCurrency(item.expense)}`} />
             </div>
