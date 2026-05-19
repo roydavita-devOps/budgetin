@@ -184,7 +184,7 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
   const [transactions, setTransactions] = useState([]);
-  const [period, setPeriod] = useState('daily');
+  const [period, setPeriod] = useState('weekly');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
   const [filters, setFilters] = useState({ type: '', category: '', sort: 'newest', search: '' });
   const [exportFilters, setExportFilters] = useState({ month: currentMonthValue(), type: '', category: '' });
@@ -743,67 +743,49 @@ export default function Home() {
 
           {canViewDashboard && activeSection === 'dashboard' ? (
             <>
-              <section className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
-                <div className="surface-card rounded-[28px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="brand-text text-xs font-medium uppercase tracking-[0.08em]">Ringkasan periode aktif</p>
-                      <h2 className="heading-text mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</h2>
-                      <p className="muted-text mt-2 text-sm leading-6">
-                        {balance >= 0 ? 'Saldo masih aman pada periode ini.' : 'Pengeluaran periode ini masih lebih tinggi dari pemasukan.'}
-                      </p>
-                    </div>
-                    <div className="surface-soft rounded-full px-4 py-2 text-sm font-semibold brand-text">
-                      {monthLabel(selectedMonth)}
-                    </div>
+              <section className="surface-card rounded-[28px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="brand-text text-xs font-medium uppercase tracking-[0.08em]">Ringkasan periode aktif</p>
+                    <h2 className="heading-text mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</h2>
+                    <p className="muted-text mt-2 text-sm leading-6">
+                      {balance >= 0 ? 'Saldo masih aman pada periode ini.' : 'Pengeluaran periode ini masih lebih tinggi dari pemasukan.'}
+                    </p>
                   </div>
-                  <div className="mt-6 grid gap-4 sm:grid-cols-3">
-                    <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} tone="success" />
-                    <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
-                    <InlineStat label="Transaksi" value={formatNumber(periodTotals.count)} />
+                  <div className="surface-soft rounded-full px-4 py-2 text-sm font-semibold brand-text">
+                    {monthLabel(selectedMonth)}
                   </div>
                 </div>
-                <div className="grid gap-5 sm:grid-cols-3 xl:grid-cols-1">
-                  <MetricCard label="Pemasukan" value={formatCurrency(periodTotals.income)} />
-                  <MetricCard label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
-                  <MetricCard label="Saldo bersih" value={formatCurrency(balance)} tone={balance < 0 ? 'danger' : 'success'} />
+                <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                  <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} tone="success" />
+                  <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
+                  <InlineStat label="Transaksi" value={formatNumber(periodTotals.count)} />
                 </div>
               </section>
 
-              <section className="grid gap-6 2xl:grid-cols-[1.55fr_0.85fr]">
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="space-y-1">
-                      <h2 className="heading-text text-xl font-semibold tracking-tight">Aktivitas transaksi</h2>
-                      <p className="muted-text text-sm leading-6">Perbandingan pemasukan dan pengeluaran pada periode yang sedang dipilih.</p>
-                    </div>
-                    <div className="surface-soft grid grid-cols-3 gap-2 rounded-2xl p-1 shadow-sm">
-                      {[
-                        ['daily', 'Harian'],
-                        ['weekly', 'Mingguan'],
-                        ['monthly', 'Bulanan'],
-                      ].map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={period === value ? 'rounded-xl bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 ease-out' : 'muted-text rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-out hover:bg-[var(--surface)] hover:text-[var(--text-primary)]'}
-                          onClick={() => setPeriod(value)}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+              <section className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="space-y-1">
+                    <h2 className="heading-text text-xl font-semibold tracking-tight">Aktivitas transaksi</h2>
+                    <p className="muted-text text-sm leading-6">Perbandingan pemasukan dan pengeluaran pada periode yang sedang dipilih.</p>
                   </div>
-                  <TrendChart data={trend} />
-                </div>
-
-                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
-                  <h2 className="heading-text text-lg font-semibold tracking-tight">Ringkasan utama</h2>
-                  <div className="mt-5 grid gap-4">
-                    <SummaryTile label="Kategori terbesar" value={categoryInsight(expenseSummary)} accent="success" />
-                    <SummaryTile label="Pola harian" value={busyDayInsight(transactions)} />
-                    <SummaryTile label="Status saldo" value={balance >= 0 ? 'Saldo periode ini masih positif.' : 'Saldo periode ini sedang minus.'} accent={balance >= 0 ? 'success' : 'danger'} />
+                  <div className="surface-soft grid grid-cols-3 gap-2 rounded-2xl p-1 shadow-sm">
+                    {[
+                      ['daily', 'Harian'],
+                      ['weekly', 'Mingguan'],
+                      ['monthly', 'Bulanan'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        className={period === value ? 'rounded-xl bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 ease-out' : 'muted-text rounded-xl px-3 py-2 text-sm font-semibold transition-colors duration-200 ease-out hover:bg-[var(--surface)] hover:text-[var(--text-primary)]'}
+                        onClick={() => setPeriod(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
+                <TrendChart data={trend} />
               </section>
             </>
           ) : null}
