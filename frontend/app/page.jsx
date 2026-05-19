@@ -115,7 +115,7 @@ function groupBySubcategory(transactions, type, category) {
       const key = item.subcategory || '__default__';
       const current = grouped.get(key) || {
         key,
-        label: item.subcategory || 'Tanpa subkategori',
+        label: item.subcategory || 'Tanpa sub-kategori',
         total: 0,
       };
       current.total += Number(item.amount || 0);
@@ -198,6 +198,7 @@ export default function Home() {
   const [categoryMessage, setCategoryMessage] = useState('');
   const [subcategoryView, setSubcategoryView] = useState({ type: 'expense', category: 'food_drink' });
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isSubcategoryDrawerOpen, setIsSubcategoryDrawerOpen] = useState(false);
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -442,14 +443,14 @@ export default function Home() {
       });
       setCustomCategories((current) => [...current, body.data].sort((a, b) => a.name.localeCompare(b.name, 'id-ID')));
       setCategoryForm((current) => ({ ...current, name: '' }));
-      setCategoryMessage('Subkategori berhasil ditambahkan.');
+      setCategoryMessage('Sub-kategori berhasil ditambahkan.');
     } catch (error) {
       setCategoryMessage(error.message);
     }
   }
 
   async function removeCustomCategory(categoryId) {
-    const confirmed = window.confirm('Hapus subkategori ini? Transaksi lama yang masih memakainya akan menolak penghapusan.');
+    const confirmed = window.confirm('Hapus sub-kategori ini? Transaksi lama yang masih memakainya akan menolak penghapusan.');
     if (!confirmed) return;
     const removed = customCategories.find((item) => item.id === categoryId);
     try {
@@ -459,7 +460,7 @@ export default function Home() {
         headers,
       });
       setCustomCategories((current) => current.filter((item) => item.id !== categoryId));
-      setCategoryMessage('Subkategori berhasil dihapus.');
+      setCategoryMessage('Sub-kategori berhasil dihapus.');
       setEditForm((current) => {
         const shouldClear = removed
           && current.type === removed.type
@@ -581,6 +582,7 @@ export default function Home() {
 
   function openCategoryModal() {
     setCategoryMessage('');
+    setIsSubcategoryDrawerOpen(false);
     setIsCategoryModalOpen(true);
   }
 
@@ -589,7 +591,17 @@ export default function Home() {
     setIsCategoryModalOpen(false);
   }
 
+  function openSubcategoryDrawer(type, category) {
+    setSubcategoryView({ type, category });
+    setIsSubcategoryDrawerOpen(true);
+  }
+
+  function closeSubcategoryDrawer() {
+    setIsSubcategoryDrawerOpen(false);
+  }
+
   function selectSection(sectionId) {
+    setIsSubcategoryDrawerOpen(false);
     setActiveSection(sectionId);
   }
 
@@ -792,120 +804,16 @@ export default function Home() {
 
           {canViewDashboard && activeSection === 'kategori' ? (
             <section className="grid gap-5 sm:gap-6">
-              <div className="grid gap-5 sm:gap-6 2xl:grid-cols-2">
-                <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." />
-                <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." />
+              <div className="surface-card flex flex-col gap-4 rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:flex-row sm:items-center sm:justify-between sm:p-6">
+                <div className="space-y-1">
+                  <h2 className="heading-text text-xl font-semibold tracking-tight">Kategori utama</h2>
+                  <p className="muted-text text-sm leading-6">Klik kategori utama untuk membuka detail sub-kategori tanpa memenuhi halaman utama.</p>
+                </div>
+                <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola sub-kategori</button>
               </div>
-
-              <div className="grid gap-5 sm:gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-                <div className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-2">
-                      <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
-                      <p className="muted-text text-sm leading-6">Pilih kategori utama untuk melihat pecahan detailnya dengan lebih nyaman.</p>
-                    </div>
-                    <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola subkategori</button>
-                  </div>
-                  <div className="mt-5 space-y-4 sm:mt-6">
-                    <div className="surface-soft inline-grid grid-cols-2 gap-2 rounded-2xl p-1 shadow-sm">
-                      {[
-                        ['expense', 'Pengeluaran'],
-                        ['income', 'Pemasukan'],
-                      ].map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={subcategoryView.type === value ? 'rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all duration-200 ease-out' : 'muted-text rounded-xl px-4 py-2 text-sm font-semibold transition-colors duration-200 ease-out hover:bg-[var(--surface)] hover:text-[var(--text-primary)]'}
-                          onClick={() => setSubcategoryView({ type: value, category: categories[value][0].code })}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {categories[subcategoryView.type].map((category) => {
-                        const isActive = subcategoryView.category === category.code;
-                        const total = totalForCategory(transactions, subcategoryView.type, category.code);
-                        const subCount = namedSubcategoryCount(transactions, subcategoryView.type, category.code);
-                        return (
-                          <button
-                            key={category.code}
-                            className={isActive ? 'surface-soft flex flex-col gap-4 rounded-[20px] border border-[var(--primary)] px-4 py-4 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex flex-col gap-4 rounded-[20px] px-4 py-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
-                            onClick={() => setSubcategoryView({ type: subcategoryView.type, category: category.code })}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex items-center gap-3">
-                                <span className="h-3 w-3 rounded-full" style={{ background: category.color }} />
-                                <div>
-                                  <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{category.label}</p>
-                                  <p className="muted-text mt-1 text-xs">{subCount ? `${subCount} subkategori aktif` : 'Belum dipecah lagi'}</p>
-                                </div>
-                              </div>
-                              <span className={isActive ? 'brand-text text-xs font-semibold' : 'muted-text text-xs font-semibold'}>{formatCurrency(total)}</span>
-                            </div>
-                            <div className="surface-muted h-2 overflow-hidden rounded-full">
-                              <div
-                                className="h-full rounded-full"
-                                style={{
-                                  width: `${currentTypeTotal ? Math.max((total / currentTypeTotal) * 100, total ? 8 : 0) : 0}%`,
-                                  background: category.color,
-                                }}
-                              />
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="surface-card rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <h2 className="heading-text text-xl font-semibold tracking-tight">
-                        {selectedCategoryMeta?.label || 'Kategori'}
-                      </h2>
-                      <p className="muted-text mt-1 text-sm leading-6">
-                        {subcategorySummary.length ? 'Rincian subkategori pada kategori yang dipilih.' : 'Belum ada subkategori atau transaksi pada kategori ini.'}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:mt-5 sm:grid-cols-3">
-                    <SummaryTile label="Total kategori" value={formatCurrency(selectedCategoryTotal)} accent="success" />
-                    <SummaryTile label="Subkategori aktif" value={`${selectedCategorySubcategoryCount}`} />
-                    <SummaryTile label="Porsi kategori" value={`${selectedCategoryShare}% dari ${subcategoryView.type === 'income' ? 'pemasukan' : 'pengeluaran'}`} />
-                  </div>
-                  <div className="mt-6 grid gap-3">
-                    {subcategorySummary.length ? subcategorySummary.map((item) => {
-                      const percentage = selectedCategoryTotal ? (item.total / selectedCategoryTotal) * 100 : 0;
-                      return (
-                        <div key={item.key} className="surface-soft rounded-[20px] p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="heading-text text-sm font-semibold">{item.label}</p>
-                            <p className="heading-text text-sm font-semibold">{formatCurrency(item.total)}</p>
-                          </div>
-                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--surface-muted)]">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${percentage}%`,
-                                background: selectedCategoryMeta?.color || 'var(--primary)',
-                              }}
-                            />
-                          </div>
-                          <p className="muted-text mt-2 text-xs">{percentage.toFixed(0)}% dari {selectedCategoryMeta?.label || 'kategori ini'}</p>
-                        </div>
-                      );
-                    }) : (
-                      <div className="surface-soft rounded-2xl p-5">
-                        <p className="heading-text text-sm font-semibold">Belum ada subkategori custom</p>
-                        <p className="muted-text mt-2 text-sm">Tambahkan subkategori dari tombol kelola agar kategori ini punya detail yang lebih spesifik.</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
+              <div className="grid gap-5 sm:gap-6 2xl:grid-cols-2">
+                <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." onSelect={(category) => openSubcategoryDrawer('expense', category)} />
+                <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." onSelect={(category) => openSubcategoryDrawer('income', category)} />
               </div>
             </section>
           ) : null}
@@ -926,7 +834,7 @@ export default function Home() {
                 <div className="surface-soft mt-6 grid gap-3 rounded-[20px] p-4 lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr]">
                   <input
                     className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
-                    placeholder="Cari catatan, kategori, atau subkategori"
+                    placeholder="Cari catatan, kategori, atau sub-kategori"
                     value={filters.search}
                     onChange={(event) => setFilters({ ...filters, search: event.target.value })}
                   />
@@ -1057,7 +965,7 @@ export default function Home() {
                 ))}
               </select>
               <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
-                <option value="">Tanpa subkategori</option>
+                <option value="">Tanpa sub-kategori</option>
                 {editSubcategoryOptions.map((subcategory) => (
                   <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
                 ))}
@@ -1072,13 +980,94 @@ export default function Home() {
         </div>
       ) : null}
 
+      {canViewDashboard && isSubcategoryDrawerOpen ? (
+        <div className="fixed inset-0 z-40 bg-black/35" onClick={closeSubcategoryDrawer}>
+          <div className="absolute inset-y-0 right-0 w-full max-w-xl p-3 sm:p-4" onClick={(event) => event.stopPropagation()}>
+            <div className="surface-card flex h-full flex-col rounded-[28px] p-5 shadow-[var(--shadow-md)] sm:p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-2">
+                  <p className="muted-text text-xs font-medium uppercase tracking-[0.08em]">
+                    {subcategoryView.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}
+                  </p>
+                  <h2 className="heading-text text-2xl font-semibold tracking-tight">
+                    {selectedCategoryMeta?.label || 'Kategori'}
+                  </h2>
+                  <p className="muted-text text-sm leading-6">
+                    {subcategorySummary.length ? 'Detail sub-kategori dari kategori utama yang kamu pilih.' : 'Belum ada sub-kategori atau transaksi pada kategori ini.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="soft-button rounded-2xl px-4 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola sub-kategori</button>
+                  <button className="soft-button rounded-2xl px-4 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={closeSubcategoryDrawer}>Tutup</button>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                <SummaryTile label="Total kategori" value={formatCurrency(selectedCategoryTotal)} accent="success" />
+                <SummaryTile label="Sub-kategori aktif" value={`${selectedCategorySubcategoryCount}`} />
+                <SummaryTile label="Porsi kategori" value={`${selectedCategoryShare}% dari ${subcategoryView.type === 'income' ? 'pemasukan' : 'pengeluaran'}`} />
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                {categories[subcategoryView.type].map((category) => {
+                  const isActive = subcategoryView.category === category.code;
+                  const total = totalForCategory(transactions, subcategoryView.type, category.code);
+                  return (
+                    <button
+                      key={category.code}
+                      className={isActive ? 'rounded-full border border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_10%,var(--surface))] px-4 py-2 text-sm font-semibold brand-text transition-all duration-200 ease-out' : 'surface-soft rounded-full px-4 py-2 text-sm font-semibold muted-text transition-all duration-200 ease-out hover:bg-[var(--surface-muted)] hover:text-[var(--text-primary)]'}
+                      onClick={() => setSubcategoryView({ type: subcategoryView.type, category: category.code })}
+                    >
+                      {category.label} <span className="ml-1 opacity-80">{formatCurrency(total)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-6 flex-1 overflow-y-auto pr-1">
+                <div className="grid gap-3">
+                  {subcategorySummary.length ? subcategorySummary.map((item) => {
+                    const percentage = selectedCategoryTotal ? (item.total / selectedCategoryTotal) * 100 : 0;
+                    return (
+                      <div key={item.key} className="surface-soft rounded-[20px] p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="heading-text text-sm font-semibold">{item.label}</p>
+                            <p className="muted-text mt-1 text-xs">{percentage.toFixed(0)}% dari {selectedCategoryMeta?.label || 'kategori ini'}</p>
+                          </div>
+                          <p className="heading-text text-sm font-semibold">{formatCurrency(item.total)}</p>
+                        </div>
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--surface-muted)]">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${percentage}%`,
+                              background: selectedCategoryMeta?.color || 'var(--primary)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <div className="surface-soft rounded-2xl p-5">
+                      <p className="heading-text text-sm font-semibold">Belum ada sub-kategori custom</p>
+                      <p className="muted-text mt-2 text-sm">Tambahkan sub-kategori dari tombol kelola agar kategori ini punya detail yang lebih spesifik.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {canViewDashboard && isCategoryModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
           <div className="surface-card max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-[24px] shadow-[var(--shadow-md)]">
             <div className="flex items-start justify-between gap-4 border-b border-[var(--border)] px-6 py-5 sm:px-8">
               <div>
-                <h2 className="heading-text text-xl font-semibold tracking-tight">Kelola subkategori</h2>
-                <p className="muted-text mt-1 text-sm leading-6">Kategori utama tetap mengikuti struktur Budgetin. Subkategori menambah detail tanpa mengubah ringkasan utama.</p>
+                <h2 className="heading-text text-xl font-semibold tracking-tight">Kelola sub-kategori</h2>
+                <p className="muted-text mt-1 text-sm leading-6">Kategori utama tetap mengikuti struktur Budgetin. Sub-kategori menambah detail tanpa mengubah ringkasan utama.</p>
               </div>
               <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={closeCategoryModal}>Tutup</button>
             </div>
@@ -1116,8 +1105,8 @@ export default function Home() {
                   />
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="muted-text text-sm">Maksimal 10 subkategori per kategori utama.</p>
-                  <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah subkategori</button>
+                  <p className="muted-text text-sm">Maksimal 10 sub-kategori per kategori utama.</p>
+                  <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah sub-kategori</button>
                 </div>
                 <p className="muted-text text-sm">{categoryMessage}</p>
               </div>
@@ -1126,9 +1115,9 @@ export default function Home() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="heading-text text-lg font-semibold tracking-tight">
-                      {categories[categoryForm.type].find((item) => item.code === categoryForm.parent_category)?.label || 'Daftar subkategori'}
+                      {categories[categoryForm.type].find((item) => item.code === categoryForm.parent_category)?.label || 'Daftar sub-kategori'}
                     </h3>
-                    <p className="muted-text mt-1 text-sm">Subkategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
+                    <p className="muted-text mt-1 text-sm">Sub-kategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
                   </div>
                   <span className="muted-text text-sm">{modalCategoryList.length}/10</span>
                 </div>
@@ -1144,7 +1133,7 @@ export default function Home() {
                     </div>
                   )) : (
                     <div className="surface-soft rounded-2xl p-5">
-                      <p className="muted-text text-sm">Belum ada subkategori custom untuk kategori ini.</p>
+                      <p className="muted-text text-sm">Belum ada sub-kategori custom untuk kategori ini.</p>
                     </div>
                   )}
                 </div>
@@ -1271,7 +1260,7 @@ function MetricCard({ label, value, tone = 'default', featured = false }) {
   );
 }
 
-function DonutChart({ title, items, emptyText }) {
+function DonutChart({ title, items, emptyText, onSelect }) {
   const total = items.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const gradient = total > 0
     ? items.reduce(
@@ -1303,20 +1292,40 @@ function DonutChart({ title, items, emptyText }) {
           </div>
         </div>
         <div className="space-y-3 sm:space-y-4">
-          {items.map((item) => (
-            <div key={item.category} className="surface-soft rounded-2xl p-3 sm:p-4">
-              <div className="flex items-center justify-between gap-3">
-                <span className="muted-text flex items-center gap-2 text-sm">
-                  <span className="h-3 w-3 rounded-full" style={{ background: item.color }} />
-                  {item.category_label}
-                </span>
-                <span className="text-sm font-semibold">{formatCurrency(item.total)}</span>
-              </div>
-              <div className="surface-muted mt-3 h-2 overflow-hidden rounded-full">
-                <div className="h-full rounded" style={{ width: `${total ? (item.total / total) * 100 : 0}%`, background: item.color }} />
-              </div>
-            </div>
-          ))}
+          {items.map((item) => {
+            const content = (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="muted-text flex items-center gap-2 text-sm">
+                    <span className="h-3 w-3 rounded-full" style={{ background: item.color }} />
+                    {item.category_label}
+                  </span>
+                  <span className="text-sm font-semibold">{formatCurrency(item.total)}</span>
+                </div>
+                <div className="surface-muted mt-3 h-2 overflow-hidden rounded-full">
+                  <div className="h-full rounded" style={{ width: `${total ? (item.total / total) * 100 : 0}%`, background: item.color }} />
+                </div>
+              </>
+            );
+
+            if (!onSelect) {
+              return (
+                <div key={item.category} className="surface-soft rounded-2xl p-3 sm:p-4">
+                  {content}
+                </div>
+              );
+            }
+
+            return (
+              <button
+                key={item.category}
+                className="surface-soft w-full rounded-2xl p-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-4"
+                onClick={() => onSelect(item.category)}
+              >
+                {content}
+              </button>
+            );
+          })}
           {!items.length && <p className="muted-text text-sm">{emptyText}</p>}
         </div>
       </div>
