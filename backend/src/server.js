@@ -401,6 +401,16 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_recovery_until TIMESTAMPTZ');
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by UUID REFERENCES users(id) ON DELETE SET NULL');
+  await query('ALTER TABLE categories ADD COLUMN IF NOT EXISTS type TEXT');
+  await query('ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_category TEXT');
+  await query('ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_custom BOOLEAN NOT NULL DEFAULT TRUE');
+  await query('ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_user_id_name_key').catch(() => {});
+  await query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS subcategory TEXT');
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_type_parent_name
+    ON categories (user_id, type, parent_category, LOWER(name))
+    WHERE is_custom = TRUE
+  `);
   await query(`
     CREATE TABLE IF NOT EXISTS telegram_accounts (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -506,36 +516,143 @@ function normalizeCategory(type, category) {
   return type === 'expense' ? 'other_expense' : null;
 }
 
+function normalizeCustomCategoryName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function isValidCategoryType(type) {
+  return type === 'income' || type === 'expense';
+}
+
+function isValidParentCategory(type, parentCategory) {
+  return Boolean(isValidCategoryType(type) && CATEGORY_DEFINITIONS[type]?.some((item) => item.code === parentCategory));
+}
+
+async function findCustomSubcategory(userId, type, parentCategory, name) {
+  const normalizedName = normalizeCustomCategoryName(name);
+  if (!normalizedName) return null;
+  const result = await query(
+    `SELECT id, user_id, type, parent_category, name, created_at
+     FROM categories
+     WHERE user_id = $1
+       AND is_custom = TRUE
+       AND type = $2
+       AND parent_category = $3
+       AND LOWER(name) = LOWER($4)
+     LIMIT 1`,
+    [userId, type, parentCategory, normalizedName],
+  );
+  return result.rows[0] || null;
+}
+
+async function listCustomSubcategories(userId) {
+  const result = await query(
+    `SELECT id, type, parent_category, name, created_at
+     FROM categories
+     WHERE user_id = $1
+       AND is_custom = TRUE
+       AND type IN ('income', 'expense')
+       AND parent_category IS NOT NULL
+     ORDER BY type ASC, parent_category ASC, LOWER(name) ASC`,
+    [userId],
+  );
+  return result.rows;
+}
+
+async function createCustomSubcategory(userId, body) {
+  const type = body.type === 'income' ? 'income' : body.type === 'expense' ? 'expense' : '';
+  const parentCategory = normalizeInput(body.parent_category).replace(/\s+/g, '_');
+  const name = normalizeCustomCategoryName(body.name);
+
+  if (!isValidCategoryType(type)) return { error: 'type must be income or expense' };
+  if (!isValidParentCategory(type, parentCategory)) return { error: 'parent_category is invalid' };
+  if (name.length < 2 || name.length > 40) return { error: 'name must be between 2 and 40 characters' };
+
+  const duplicate = await findCustomSubcategory(userId, type, parentCategory, name);
+  if (duplicate) return { error: 'Subkategori ini sudah ada', status: 409 };
+
+  const limitCheck = await query(
+    `SELECT COUNT(*)::int AS total
+     FROM categories
+     WHERE user_id = $1
+       AND is_custom = TRUE
+       AND type = $2
+       AND parent_category = $3`,
+    [userId, type, parentCategory],
+  );
+  if (Number(limitCheck.rows[0]?.total || 0) >= 10) {
+    return { error: 'Maksimal 10 subkategori untuk kategori utama ini', status: 400 };
+  }
+
+  const result = await query(
+    `INSERT INTO categories (user_id, name, type, parent_category, is_custom)
+     VALUES ($1, $2, $3, $4, TRUE)
+     RETURNING id, type, parent_category, name, created_at`,
+    [userId, name, type, parentCategory],
+  );
+
+  return { data: result.rows[0] };
+}
+
+async function deleteCustomSubcategory(userId, categoryId) {
+  const existing = await query(
+    `SELECT id, type, parent_category, name
+     FROM categories
+     WHERE id = $1
+       AND user_id = $2
+       AND is_custom = TRUE
+     LIMIT 1`,
+    [categoryId, userId],
+  );
+  const row = existing.rows[0];
+  if (!row) return { error: 'Subkategori tidak ditemukan', status: 404 };
+
+  const usage = await query(
+    `SELECT COUNT(*)::int AS total
+     FROM transactions
+     WHERE user_id = $1
+       AND type = $2
+       AND category = $3
+       AND LOWER(COALESCE(subcategory, '')) = LOWER($4)`,
+    [userId, row.type, row.parent_category, row.name],
+  );
+  if (Number(usage.rows[0]?.total || 0) > 0) {
+    return { error: 'Subkategori masih dipakai transaksi lama', status: 409 };
+  }
+
+  await query('DELETE FROM categories WHERE id = $1 AND user_id = $2', [categoryId, userId]);
+  return { data: row };
+}
+
 function validateTransaction(body) {
   const type = body.type === 'income' ? 'income' : body.type === 'expense' ? 'expense' : null;
   const amount = Number(body.amount);
   const category = type ? normalizeCategory(type, body.category) : null;
   const note = String(body.note || '').trim();
+  const subcategory = normalizeCustomCategoryName(body.subcategory || '');
 
   if (!type) return { error: 'type must be income or expense' };
   if (!Number.isFinite(amount) || amount <= 0) return { error: 'amount must be greater than 0' };
   if (!category) return { error: 'category is required' };
 
-  return { value: { type, amount, category, note } };
+  return { value: { type, amount, category, note, subcategory } };
 }
 
 async function createTransactionForUser(userId, body) {
   const parsed = validateTransaction(body);
   if (parsed.error) return { error: parsed.error };
 
-  const { type, amount, category, note } = parsed.value;
-  await query(
-    `INSERT INTO categories (user_id, name)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, name) DO NOTHING`,
-    [userId, category],
-  );
+  const { type, amount, category, note, subcategory } = parsed.value;
+  if (subcategory) {
+    const customSubcategory = await findCustomSubcategory(userId, type, category, subcategory);
+    if (!customSubcategory) return { error: 'subcategory is invalid' };
+  }
 
   const result = await query(
-    `INSERT INTO transactions (user_id, type, amount, category, note)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, type, amount::float AS amount, category, note, created_at`,
-    [userId, type, amount, category, note],
+    `INSERT INTO transactions (user_id, type, amount, category, subcategory, note)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
+    [userId, type, amount, category, subcategory || null, note],
   );
 
   await invalidateSummaryCache(userId);
@@ -546,24 +663,23 @@ async function updateTransactionForUser(userId, transactionId, body) {
   const parsed = validateTransaction(body);
   if (parsed.error) return { error: parsed.error };
 
-  const { type, amount, category, note } = parsed.value;
-  await query(
-    `INSERT INTO categories (user_id, name)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, name) DO NOTHING`,
-    [userId, category],
-  );
+  const { type, amount, category, note, subcategory } = parsed.value;
+  if (subcategory) {
+    const customSubcategory = await findCustomSubcategory(userId, type, category, subcategory);
+    if (!customSubcategory) return { error: 'subcategory is invalid' };
+  }
 
   const result = await query(
     `UPDATE transactions
      SET type = $3,
        amount = $4,
        category = $5,
-       note = $6
+       subcategory = $6,
+       note = $7
      WHERE id = $1
        AND user_id = $2
-     RETURNING id, type, amount::float AS amount, category, note, created_at`,
-    [transactionId, userId, type, amount, category, note],
+     RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
+    [transactionId, userId, type, amount, category, subcategory || null, note],
   );
 
   if (!result.rows[0]) return { error: 'Transaksi tidak ditemukan', status: 404 };
@@ -597,6 +713,7 @@ function buildTransactionFilters(userId, queryParams) {
     filters.push(`(
       LOWER(COALESCE(note, '')) LIKE $${params.length}
       OR LOWER(REPLACE(category, '_', ' ')) LIKE $${params.length}
+      OR LOWER(COALESCE(subcategory, '')) LIKE $${params.length}
       OR LOWER(
         CASE category
           ${CATEGORY_OPTIONS.map((item, index) => `WHEN '${item.code}' THEN $${params.length + index + 1}`).join(' ')}
@@ -710,14 +827,14 @@ async function getSummaryForUser(userId, queryParams = {}) {
 async function buildTransactionsCsv(userId, queryParams) {
   const { where, params } = buildTransactionFilters(userId, queryParams);
   const result = await query(
-    `SELECT created_at, type, category, amount::float AS amount, note
+    `SELECT created_at, type, category, subcategory, amount::float AS amount, note
      FROM transactions
      WHERE ${where}
      ORDER BY created_at ASC`,
     params,
   );
 
-  const header = ['date', 'type', 'category', 'category_label', 'amount', 'note'];
+  const header = ['date', 'type', 'category', 'category_label', 'subcategory', 'amount', 'note'];
   return [
     header.join(','),
     ...result.rows.map((row) =>
@@ -726,6 +843,7 @@ async function buildTransactionsCsv(userId, queryParams) {
         row.type,
         row.category,
         categoryLabel(row.category),
+        row.subcategory || '',
         row.amount,
         row.note || '',
       ]
@@ -1067,7 +1185,7 @@ app.get('/telegram/transactions', botInternalRequired, async (req, res) => {
   params.push(limit);
   params.push(offset);
   const result = await query(
-    `SELECT id, type, amount::float AS amount, category, note, created_at
+    `SELECT id, type, amount::float AS amount, category, subcategory, note, created_at
      FROM transactions
      WHERE ${where}
      ORDER BY ${transactionOrder(req.query.sort)}
@@ -1110,7 +1228,7 @@ app.delete('/telegram/transactions/:id', botInternalRequired, async (req, res) =
   const result = await query(
     `DELETE FROM transactions
      WHERE id = $1 AND user_id = $2
-     RETURNING id, type, amount::float AS amount, category, note, created_at`,
+     RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
     [req.params.id, user.id],
   );
 
@@ -1765,7 +1883,7 @@ app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async 
     } else {
       const deleteResult = await query('DELETE FROM transactions WHERE user_id = $1 RETURNING id', [deletionRequest.user_id]);
       deletedCount = deleteResult.rowCount;
-      await redis.del(`summary:${deletionRequest.user_id}`).catch(() => {});
+      await invalidateSummaryCache(deletionRequest.user_id);
     }
   }
 
@@ -1784,23 +1902,20 @@ app.patch('/telegram/admin/deletion-requests/:code', botInternalRequired, async 
   });
 });
 
-app.get('/categories', authRequired, async (req, res) => {
-  res.json({ data: CATEGORY_DEFINITIONS });
+app.get('/categories', authRequired, webFeatureRequired, async (req, res) => {
+  res.json({ data: CATEGORY_DEFINITIONS, custom: await listCustomSubcategories(req.user.id) });
 });
 
-app.post('/categories', authRequired, async (req, res) => {
-  const type = req.body.type === 'income' ? 'income' : req.body.type === 'expense' ? 'expense' : null;
-  const name = type ? normalizeCategory(type, req.body.name) : '';
-  if (!name) return res.status(400).json({ error: 'name is required' });
+app.post('/categories', authRequired, webFeatureRequired, async (req, res) => {
+  const result = await createCustomSubcategory(req.user.id, req.body);
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  res.status(201).json(result);
+});
 
-  const result = await query(
-    `INSERT INTO categories (user_id, name)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
-     RETURNING id, name, created_at`,
-    [req.user.id, name],
-  );
-  res.status(201).json({ data: result.rows[0] });
+app.delete('/categories/:id', authRequired, webFeatureRequired, async (req, res) => {
+  const result = await deleteCustomSubcategory(req.user.id, req.params.id);
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  res.json(result);
 });
 
 app.get('/transactions', authRequired, webFeatureRequired, async (req, res) => {
@@ -1808,7 +1923,7 @@ app.get('/transactions', authRequired, webFeatureRequired, async (req, res) => {
   const { where, params } = buildTransactionFilters(req.user.id, req.query);
   params.push(limit);
   const result = await query(
-    `SELECT id, type, amount::float AS amount, category, note, created_at
+    `SELECT id, type, amount::float AS amount, category, subcategory, note, created_at
      FROM transactions
      WHERE ${where}
      ORDER BY ${transactionOrder(req.query.sort)}
@@ -1834,7 +1949,7 @@ app.delete('/transactions/:id', authRequired, webFeatureRequired, async (req, re
   const result = await query(
     `DELETE FROM transactions
      WHERE id = $1 AND user_id = $2
-     RETURNING id, type, amount::float AS amount, category, note, created_at`,
+     RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
     [req.params.id, req.user.id],
   );
 
@@ -1855,12 +1970,7 @@ app.get('/exports/transactions.csv', authRequired, webFeatureRequired, async (re
 });
 
 async function seedDefaultCategories(userId) {
-  const categories = CATEGORY_OPTIONS.map((category) => category.code);
-  await Promise.all(
-    categories.map((name) =>
-      query('INSERT INTO categories (user_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, name]),
-    ),
-  );
+  void userId;
 }
 
 async function processDueAccountDeletionRequests() {

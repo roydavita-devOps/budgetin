@@ -43,8 +43,10 @@ CREATE TABLE IF NOT EXISTS categories (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (user_id, name)
+  type TEXT,
+  parent_category TEXT,
+  is_custom BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
   amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
   category TEXT NOT NULL,
+  subcategory TEXT,
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -79,3 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_created_at
 
 CREATE INDEX IF NOT EXISTS idx_transactions_user_category
   ON transactions (user_id, category);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_type_parent_name
+  ON categories (user_id, type, parent_category, LOWER(name))
+  WHERE is_custom = TRUE;

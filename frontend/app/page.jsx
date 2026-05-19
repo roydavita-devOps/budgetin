@@ -164,7 +164,10 @@ export default function Home() {
   const [themeReady, setThemeReady] = useState(false);
   const [activeSection, setActiveSection] = useState('dashboard');
   const [editingTransaction, setEditingTransaction] = useState(null);
-  const [editForm, setEditForm] = useState({ type: 'expense', amount: '', category: '', note: '' });
+  const [editForm, setEditForm] = useState({ type: 'expense', amount: '', category: '', subcategory: '', note: '' });
+  const [customCategories, setCustomCategories] = useState([]);
+  const [categoryForm, setCategoryForm] = useState({ type: 'expense', parent_category: 'food_drink', name: '' });
+  const [categoryMessage, setCategoryMessage] = useState('');
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -178,7 +181,7 @@ export default function Home() {
       if (filters.type && item.type !== filters.type) return false;
       if (filters.category && item.category !== filters.category) return false;
       if (filters.search) {
-        const haystack = `${item.category_label || item.category} ${item.note || ''}`.toLowerCase();
+        const haystack = `${item.category_label || item.category} ${item.subcategory || ''} ${item.note || ''}`.toLowerCase();
         if (!haystack.includes(filters.search.toLowerCase())) return false;
       }
       return true;
@@ -192,6 +195,18 @@ export default function Home() {
   const trend = useMemo(() => buildTrend(transactions, period), [transactions, period]);
   const balance = periodTotals.income - periodTotals.expense;
   const currentSection = sidebarItems.find((item) => item.id === activeSection) || sidebarItems[0];
+  const customCategoryGroups = useMemo(() => {
+    return customCategories.reduce((groups, item) => {
+      const key = `${item.type}:${item.parent_category}`;
+      const list = groups.get(key) || [];
+      list.push(item);
+      groups.set(key, list);
+      return groups;
+    }, new Map());
+  }, [customCategories]);
+  const editSubcategoryOptions = useMemo(() => {
+    return customCategories.filter((item) => item.type === editForm.type && item.parent_category === editForm.category);
+  }, [customCategories, editForm.type, editForm.category]);
 
   async function clearSession(message = 'Session berakhir. Silakan login ulang.') {
     sessionStorage.removeItem(storageKey);
@@ -323,19 +338,30 @@ export default function Home() {
     setTransactions(transactionBody.data);
   }
 
+  async function loadCategories() {
+    if (!token || !user?.is_verified || user?.is_blocked || user?.is_deleted) {
+      setCustomCategories([]);
+      return;
+    }
+
+    const body = await request('/categories', { headers });
+    setCustomCategories(body.custom || []);
+  }
+
   function startEditTransaction(item) {
     setEditingTransaction(item);
     setEditForm({
       type: item.type,
       amount: String(Number(item.amount || 0)),
       category: item.category,
+      subcategory: item.subcategory || '',
       note: item.note || '',
     });
   }
 
   function cancelEditTransaction() {
     setEditingTransaction(null);
-    setEditForm({ type: 'expense', amount: '', category: '', note: '' });
+    setEditForm({ type: 'expense', amount: '', category: '', subcategory: '', note: '' });
   }
 
   async function saveTransactionEdit() {
@@ -347,6 +373,7 @@ export default function Home() {
         type: editForm.type,
         amount: Number(editForm.amount),
         category: editForm.category,
+        subcategory: editForm.subcategory,
         note: editForm.note,
       }),
     });
@@ -364,6 +391,47 @@ export default function Home() {
       headers,
     });
     setTransactions((current) => current.filter((item) => item.id !== itemId));
+  }
+
+  async function createCustomCategory() {
+    try {
+      setCategoryMessage('');
+      const body = await request('/categories', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(categoryForm),
+      });
+      setCustomCategories((current) => [...current, body.data].sort((a, b) => a.name.localeCompare(b.name, 'id-ID')));
+      setCategoryForm((current) => ({ ...current, name: '' }));
+      setCategoryMessage('Subkategori berhasil ditambahkan.');
+    } catch (error) {
+      setCategoryMessage(error.message);
+    }
+  }
+
+  async function removeCustomCategory(categoryId) {
+    const confirmed = window.confirm('Hapus subkategori ini? Transaksi lama yang masih memakainya akan menolak penghapusan.');
+    if (!confirmed) return;
+    const removed = customCategories.find((item) => item.id === categoryId);
+    try {
+      setCategoryMessage('');
+      await request(`/categories/${categoryId}`, {
+        method: 'DELETE',
+        headers,
+      });
+      setCustomCategories((current) => current.filter((item) => item.id !== categoryId));
+      setCategoryMessage('Subkategori berhasil dihapus.');
+      setEditForm((current) => {
+        const shouldClear = removed
+          && current.type === removed.type
+          && current.category === removed.parent_category
+          && current.subcategory === removed.name;
+        const stillExists = customCategories.some((item) => item.id !== categoryId && item.type === current.type && item.parent_category === current.category && item.name === current.subcategory);
+        return shouldClear && !stillExists ? { ...current, subcategory: '' } : current;
+      });
+    } catch (error) {
+      setCategoryMessage(error.message);
+    }
   }
 
   async function exportCsv() {
@@ -463,6 +531,10 @@ export default function Home() {
   useEffect(() => {
     loadData().catch(console.error);
   }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, filters.sort, filters.search]);
+
+  useEffect(() => {
+    loadCategories().catch(console.error);
+  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
 
   function toggleTheme() {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
@@ -668,9 +740,94 @@ export default function Home() {
           ) : null}
 
           {canViewDashboard && activeSection === 'kategori' ? (
-            <section className="grid gap-6 2xl:grid-cols-2">
-              <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." />
-              <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." />
+            <section className="grid gap-6">
+              <div className="grid gap-6 2xl:grid-cols-2">
+                <DonutChart title="Pengeluaran per kategori" items={expenseSummary} emptyText="Belum ada pengeluaran." />
+                <DonutChart title="Pemasukan per kategori" items={incomeSummary} emptyText="Belum ada pemasukan." />
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <div className="space-y-2">
+                    <h2 className="heading-text text-xl font-semibold tracking-tight">Subkategori custom</h2>
+                    <p className="muted-text text-sm leading-6">Kategori utama tetap mengikuti struktur Budgetin. Subkategori ini hanya menambah detail di bawah kategori utama.</p>
+                  </div>
+                  <div className="mt-6 grid gap-4">
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <select
+                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                        value={categoryForm.type}
+                        onChange={(event) => {
+                          const nextType = event.target.value;
+                          const nextParent = categories[nextType][0].code;
+                          setCategoryForm({ type: nextType, parent_category: nextParent, name: '' });
+                        }}
+                      >
+                        <option value="expense">Pengeluaran</option>
+                        <option value="income">Pemasukan</option>
+                      </select>
+                      <select
+                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                        value={categoryForm.parent_category}
+                        onChange={(event) => setCategoryForm({ ...categoryForm, parent_category: event.target.value })}
+                      >
+                        {categories[categoryForm.type].map((category) => (
+                          <option key={category.code} value={category.code}>{category.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
+                        value={categoryForm.name}
+                        onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
+                        placeholder="Contoh: Kopi"
+                        maxLength={40}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="muted-text text-sm">Maksimal 10 subkategori per kategori utama.</p>
+                      <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah subkategori</button>
+                    </div>
+                    <p className="muted-text text-sm">{categoryMessage}</p>
+                  </div>
+                </div>
+
+                <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <div className="space-y-2">
+                    <h2 className="heading-text text-xl font-semibold tracking-tight">Daftar subkategori</h2>
+                    <p className="muted-text text-sm leading-6">Subkategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
+                  </div>
+                  <div className="mt-6 grid gap-5">
+                    {Object.entries(categories).flatMap(([type, list]) =>
+                      list.map((category) => {
+                        const key = `${type}:${category.code}`;
+                        const items = customCategoryGroups.get(key) || [];
+                        return (
+                          <div key={key} className="surface-soft rounded-2xl p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="heading-text text-sm font-semibold">{category.label}</p>
+                                <p className="muted-text mt-1 text-xs">{type === 'income' ? 'Pemasukan' : 'Pengeluaran'}</p>
+                              </div>
+                              <span className="muted-text text-xs">{items.length}/10</span>
+                            </div>
+                            <div className="mt-4 grid gap-2">
+                              {items.length ? items.map((item) => (
+                                <div key={item.id} className="surface-card flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
+                                  <div>
+                                    <p className="heading-text text-sm font-semibold">{item.name}</p>
+                                    <p className="muted-text mt-1 text-xs">{new Date(item.created_at).toLocaleDateString('id-ID')}</p>
+                                  </div>
+                                  <button className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => removeCustomCategory(item.id)}>Hapus</button>
+                                </div>
+                              )) : <p className="muted-text text-sm">Belum ada subkategori custom.</p>}
+                            </div>
+                          </div>
+                        );
+                      }),
+                    )}
+                  </div>
+                </div>
+              </div>
             </section>
           ) : null}
 
@@ -721,14 +878,20 @@ export default function Home() {
                       <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
                     </div>
                     <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code })}>
+                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code, subcategory: '' })}>
                         <option value="income">Pemasukan</option>
                         <option value="expense">Pengeluaran</option>
                       </select>
                       <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
-                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value })}>
+                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value, subcategory: '' })}>
                         {categories[editForm.type].map((category) => (
                           <option key={category.code} value={category.code}>{category.label}</option>
+                        ))}
+                      </select>
+                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
+                        <option value="">Tanpa subkategori</option>
+                        {editSubcategoryOptions.map((subcategory) => (
+                          <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
                         ))}
                       </select>
                       <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
@@ -743,7 +906,10 @@ export default function Home() {
                 {filteredTransactions.map((item) => (
                   <div key={item.id} className="grid gap-3 rounded-2xl p-4 transition-all duration-200 ease-out hover:bg-[var(--row-hover)] hover:shadow-sm sm:grid-cols-[1fr_auto] sm:items-center">
                     <div className="min-w-0">
-                      <p className="heading-text font-semibold tracking-tight">{item.category_label || item.category}</p>
+                      <p className="heading-text font-semibold tracking-tight">
+                        {item.category_label || item.category}
+                        {item.subcategory ? ` - ${item.subcategory}` : ''}
+                      </p>
                       <p className="muted-text mt-1 text-sm leading-6">{item.note || '-'} - {new Date(item.created_at).toLocaleString('id-ID')}</p>
                     </div>
                     <div className="flex items-center justify-end gap-3">
