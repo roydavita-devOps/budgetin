@@ -131,6 +131,10 @@ function totalForCategory(transactions, type, category) {
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 }
 
+function namedSubcategoryCount(transactions, type, category) {
+  return groupBySubcategory(transactions, type, category).filter((item) => item.key !== '__default__').length;
+}
+
 function buildTrend(transactions, period) {
   const grouped = new Map();
 
@@ -227,6 +231,8 @@ export default function Home() {
   const selectedCategoryMeta = categoryMeta[subcategoryView.category];
   const selectedCategoryTotal = subcategorySummary.reduce((sum, item) => sum + item.total, 0);
   const selectedCategorySubcategoryCount = subcategorySummary.filter((item) => item.key !== '__default__').length;
+  const currentTypeTotal = subcategoryView.type === 'income' ? periodTotals.income : periodTotals.expense;
+  const selectedCategoryShare = currentTypeTotal ? Math.round((selectedCategoryTotal / currentTypeTotal) * 100) : 0;
   const customCategoryGroups = useMemo(() => {
     return customCategories.reduce((groups, item) => {
       const key = `${item.type}:${item.parent_category}`;
@@ -737,13 +743,23 @@ export default function Home() {
 
           {canViewDashboard && activeSection === 'dashboard' ? (
             <>
-              <section className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
-                <div className="rounded-[24px] bg-[var(--primary)] p-6 text-white shadow-[var(--shadow-md)] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
-                  <p className="text-xs font-medium uppercase tracking-[0.08em] text-white/75">Saldo periode aktif</p>
-                  <p className="mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</p>
+              <section className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
+                <div className="surface-card rounded-[28px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="brand-text text-xs font-medium uppercase tracking-[0.08em]">Ringkasan periode aktif</p>
+                      <h2 className="heading-text mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</h2>
+                      <p className="muted-text mt-2 text-sm leading-6">
+                        {balance >= 0 ? 'Saldo masih aman pada periode ini.' : 'Pengeluaran periode ini masih lebih tinggi dari pemasukan.'}
+                      </p>
+                    </div>
+                    <div className="surface-soft rounded-full px-4 py-2 text-sm font-semibold brand-text">
+                      {monthLabel(selectedMonth)}
+                    </div>
+                  </div>
                   <div className="mt-6 grid gap-4 sm:grid-cols-3">
-                    <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} />
-                    <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} />
+                    <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} tone="success" />
+                    <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
                     <InlineStat label="Transaksi" value={formatNumber(periodTotals.count)} />
                   </div>
                 </div>
@@ -804,7 +820,7 @@ export default function Home() {
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="space-y-2">
                       <h2 className="heading-text text-xl font-semibold tracking-tight">Detail subkategori</h2>
-                      <p className="muted-text text-sm leading-6">Pilih kategori utama dulu. Detail subkategori baru muncul setelah itu, supaya tampilan tetap ringan untuk user.</p>
+                      <p className="muted-text text-sm leading-6">Pilih kategori utama untuk melihat pecahan detailnya dengan lebih nyaman.</p>
                     </div>
                     <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={openCategoryModal}>Kelola subkategori</button>
                   </div>
@@ -823,25 +839,36 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <div className="grid gap-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
                       {categories[subcategoryView.type].map((category) => {
                         const isActive = subcategoryView.category === category.code;
                         const total = totalForCategory(transactions, subcategoryView.type, category.code);
-                        const subCount = groupBySubcategory(transactions, subcategoryView.type, category.code).filter((item) => item.key !== '__default__').length;
+                        const subCount = namedSubcategoryCount(transactions, subcategoryView.type, category.code);
                         return (
                           <button
                             key={category.code}
-                            className={isActive ? 'surface-soft flex items-center justify-between rounded-2xl border border-[var(--primary)] px-4 py-4 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex items-center justify-between rounded-2xl px-4 py-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
+                            className={isActive ? 'surface-soft flex flex-col gap-4 rounded-[20px] border border-[var(--primary)] px-4 py-4 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex flex-col gap-4 rounded-[20px] px-4 py-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
                             onClick={() => setSubcategoryView({ type: subcategoryView.type, category: category.code })}
                           >
-                            <div className="flex items-center gap-3">
-                              <span className="h-3 w-3 rounded-full" style={{ background: category.color }} />
-                              <div>
-                                <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{category.label}</p>
-                                <p className="muted-text mt-1 text-xs">{subCount ? `${subCount} subkategori aktif` : (subcategoryView.type === 'income' ? 'Detail pemasukan' : 'Detail pengeluaran')}</p>
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex items-center gap-3">
+                                <span className="h-3 w-3 rounded-full" style={{ background: category.color }} />
+                                <div>
+                                  <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{category.label}</p>
+                                  <p className="muted-text mt-1 text-xs">{subCount ? `${subCount} subkategori aktif` : 'Belum dipecah lagi'}</p>
+                                </div>
                               </div>
+                              <span className={isActive ? 'brand-text text-xs font-semibold' : 'muted-text text-xs font-semibold'}>{formatCurrency(total)}</span>
                             </div>
-                            <span className={isActive ? 'brand-text text-sm font-semibold' : 'muted-text text-sm font-semibold'}>{formatCurrency(total)}</span>
+                            <div className="surface-muted h-2 overflow-hidden rounded-full">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${currentTypeTotal ? Math.max((total / currentTypeTotal) * 100, total ? 8 : 0) : 0}%`,
+                                  background: category.color,
+                                }}
+                              />
+                            </div>
                           </button>
                         );
                       })}
@@ -861,14 +888,18 @@ export default function Home() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
-                      <p className="surface-soft muted-text rounded-full px-3 py-1 text-sm font-semibold">{selectedCategorySubcategoryCount} subkategori</p>
                     </div>
+                  </div>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <SummaryTile label="Total kategori" value={formatCurrency(selectedCategoryTotal)} accent="success" />
+                    <SummaryTile label="Subkategori aktif" value={`${selectedCategorySubcategoryCount}`} />
+                    <SummaryTile label="Porsi kategori" value={`${selectedCategoryShare}% dari ${subcategoryView.type === 'income' ? 'pemasukan' : 'pengeluaran'}`} />
                   </div>
                   <div className="mt-6 grid gap-3">
                     {subcategorySummary.length ? subcategorySummary.map((item) => {
                       const percentage = selectedCategoryTotal ? (item.total / selectedCategoryTotal) * 100 : 0;
                       return (
-                        <div key={item.key} className="surface-soft rounded-2xl p-4">
+                        <div key={item.key} className="surface-soft rounded-[20px] p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
                           <div className="flex items-center justify-between gap-3">
                             <p className="heading-text text-sm font-semibold">{item.label}</p>
                             <p className="heading-text text-sm font-semibold">{formatCurrency(item.total)}</p>
@@ -1156,9 +1187,14 @@ function StatusPanel({ title, children, tone = 'default' }) {
   );
 }
 
-function InlineStat({ label, value }) {
+function InlineStat({ label, value, tone = 'default' }) {
+  const toneClass = tone === 'success'
+    ? 'bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]'
+    : tone === 'danger'
+      ? 'bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]'
+      : 'bg-[color-mix(in_srgb,var(--surface-soft)_55%,transparent)]';
   return (
-    <div className="rounded-2xl bg-white/10 p-4">
+    <div className={`rounded-2xl p-4 ${toneClass}`}>
       <p className="text-xs font-medium uppercase tracking-[0.08em] text-white/75">{label}</p>
       <p className="mt-2 text-lg font-semibold tracking-tight text-white">{value}</p>
     </div>
