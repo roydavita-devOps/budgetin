@@ -125,6 +125,12 @@ function groupBySubcategory(transactions, type, category) {
   return [...grouped.values()].sort((a, b) => b.total - a.total);
 }
 
+function totalForCategory(transactions, type, category) {
+  return transactions
+    .filter((item) => item.type === type && item.category === category)
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+}
+
 function buildTrend(transactions, period) {
   const grouped = new Map();
 
@@ -220,6 +226,7 @@ export default function Home() {
   }, [transactions, subcategoryView.type, subcategoryView.category]);
   const selectedCategoryMeta = categoryMeta[subcategoryView.category];
   const selectedCategoryTotal = subcategorySummary.reduce((sum, item) => sum + item.total, 0);
+  const selectedCategorySubcategoryCount = subcategorySummary.filter((item) => item.key !== '__default__').length;
   const customCategoryGroups = useMemo(() => {
     return customCategories.reduce((groups, item) => {
       const key = `${item.type}:${item.parent_category}`;
@@ -730,11 +737,21 @@ export default function Home() {
 
           {canViewDashboard && activeSection === 'dashboard' ? (
             <>
-              <section className="grid gap-5 sm:grid-cols-2 2xl:grid-cols-4">
-                <MetricCard label="Pemasukan" value={formatCurrency(periodTotals.income)} />
-                <MetricCard label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
-                <MetricCard label="Saldo" value={formatCurrency(balance)} tone={balance < 0 ? 'danger' : 'success'} featured={balance >= 0} />
-                <MetricCard label="Transaksi" value={formatNumber(periodTotals.count)} />
+              <section className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+                <div className="rounded-[24px] bg-[var(--primary)] p-6 text-white shadow-[var(--shadow-md)] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+                  <p className="text-xs font-medium uppercase tracking-[0.08em] text-white/75">Saldo periode aktif</p>
+                  <p className="mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</p>
+                  <div className="mt-6 grid gap-4 sm:grid-cols-3">
+                    <InlineStat label="Pemasukan" value={formatCurrency(periodTotals.income)} />
+                    <InlineStat label="Pengeluaran" value={formatCurrency(periodTotals.expense)} />
+                    <InlineStat label="Transaksi" value={formatNumber(periodTotals.count)} />
+                  </div>
+                </div>
+                <div className="grid gap-5 sm:grid-cols-3 xl:grid-cols-1">
+                  <MetricCard label="Pemasukan" value={formatCurrency(periodTotals.income)} />
+                  <MetricCard label="Pengeluaran" value={formatCurrency(periodTotals.expense)} tone="danger" />
+                  <MetricCard label="Saldo bersih" value={formatCurrency(balance)} tone={balance < 0 ? 'danger' : 'success'} />
+                </div>
               </section>
 
               <section className="grid gap-6 2xl:grid-cols-[1.55fr_0.85fr]">
@@ -766,9 +783,9 @@ export default function Home() {
                 <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
                   <h2 className="heading-text text-lg font-semibold tracking-tight">Ringkasan utama</h2>
                   <div className="mt-5 grid gap-4">
-                    <SummaryTile label="Kategori terbesar" value={categoryInsight(expenseSummary)} />
+                    <SummaryTile label="Kategori terbesar" value={categoryInsight(expenseSummary)} accent="success" />
                     <SummaryTile label="Pola harian" value={busyDayInsight(transactions)} />
-                    <SummaryTile label="Status saldo" value={balance >= 0 ? 'Saldo periode ini masih positif.' : 'Saldo periode ini sedang minus.'} />
+                    <SummaryTile label="Status saldo" value={balance >= 0 ? 'Saldo periode ini masih positif.' : 'Saldo periode ini sedang minus.'} accent={balance >= 0 ? 'success' : 'danger'} />
                   </div>
                 </div>
               </section>
@@ -806,23 +823,25 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <div className="grid gap-2">
+                    <div className="grid gap-3">
                       {categories[subcategoryView.type].map((category) => {
                         const isActive = subcategoryView.category === category.code;
+                        const total = totalForCategory(transactions, subcategoryView.type, category.code);
+                        const subCount = groupBySubcategory(transactions, subcategoryView.type, category.code).filter((item) => item.key !== '__default__').length;
                         return (
                           <button
                             key={category.code}
-                            className={isActive ? 'surface-soft flex items-center justify-between rounded-2xl border border-[var(--primary)] px-4 py-3 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex items-center justify-between rounded-2xl px-4 py-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
+                            className={isActive ? 'surface-soft flex items-center justify-between rounded-2xl border border-[var(--primary)] px-4 py-4 text-left shadow-sm transition-all duration-200 ease-out' : 'surface-card flex items-center justify-between rounded-2xl px-4 py-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
                             onClick={() => setSubcategoryView({ type: subcategoryView.type, category: category.code })}
                           >
                             <div className="flex items-center gap-3">
                               <span className="h-3 w-3 rounded-full" style={{ background: category.color }} />
                               <div>
                                 <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{category.label}</p>
-                                <p className="muted-text mt-1 text-xs">{subcategoryView.type === 'income' ? 'Detail pemasukan' : 'Detail pengeluaran'}</p>
+                                <p className="muted-text mt-1 text-xs">{subCount ? `${subCount} subkategori aktif` : (subcategoryView.type === 'income' ? 'Detail pemasukan' : 'Detail pengeluaran')}</p>
                               </div>
                             </div>
-                            <span className="muted-text text-xs">{formatCurrency(groupBySubcategory(transactions, subcategoryView.type, category.code).reduce((sum, item) => sum + item.total, 0))}</span>
+                            <span className={isActive ? 'brand-text text-sm font-semibold' : 'muted-text text-sm font-semibold'}>{formatCurrency(total)}</span>
                           </button>
                         );
                       })}
@@ -840,7 +859,10 @@ export default function Home() {
                         {subcategorySummary.length ? 'Rincian subkategori pada kategori yang dipilih.' : 'Belum ada subkategori atau transaksi pada kategori ini.'}
                       </p>
                     </div>
-                    <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatCurrency(selectedCategoryTotal)}</p>
+                      <p className="surface-soft muted-text rounded-full px-3 py-1 text-sm font-semibold">{selectedCategorySubcategoryCount} subkategori</p>
+                    </div>
                   </div>
                   <div className="mt-6 grid gap-3">
                     {subcategorySummary.length ? subcategorySummary.map((item) => {
@@ -865,7 +887,8 @@ export default function Home() {
                       );
                     }) : (
                       <div className="surface-soft rounded-2xl p-5">
-                        <p className="muted-text text-sm">Belum ada detail yang bisa ditampilkan.</p>
+                        <p className="heading-text text-sm font-semibold">Belum ada subkategori custom</p>
+                        <p className="muted-text mt-2 text-sm">Tambahkan subkategori dari tombol kelola agar kategori ini punya detail yang lebih spesifik.</p>
                       </div>
                     )}
                   </div>
@@ -880,14 +903,17 @@ export default function Home() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                   <div>
                     <h2 className="heading-text text-xl font-semibold tracking-tight">Riwayat transaksi</h2>
-                    <p className="muted-text mt-1 text-sm leading-6">Filter transaksi berdasarkan tipe, kategori, dan urutan data.</p>
+                    <p className="muted-text mt-1 text-sm leading-6">Cari, filter, lalu perbaiki transaksi yang salah input dari sini.</p>
                   </div>
-                  <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatNumber(filteredTotals.count)} transaksi</p>
+                  <div className="flex items-center gap-2">
+                    <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatNumber(filteredTotals.count)} transaksi</p>
+                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', sort: 'newest', search: '' })}>Reset filter</button>
+                  </div>
                 </div>
-                <div className="mt-6 grid gap-3 md:grid-cols-3">
+                <div className="surface-soft mt-6 grid gap-3 rounded-[20px] p-4 lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr]">
                   <input
-                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md md:col-span-3"
-                    placeholder="Cari catatan atau kategori"
+                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
+                    placeholder="Cari catatan, kategori, atau subkategori"
                     value={filters.search}
                     onChange={(event) => setFilters({ ...filters, search: event.target.value })}
                   />
@@ -910,41 +936,6 @@ export default function Home() {
                   </select>
                 </div>
               </div>
-              {editingTransaction ? (
-                <div className="border-b border-[var(--border)] px-6 pb-6 sm:px-8">
-                  <div className="surface-soft rounded-[20px] p-5">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <h3 className="heading-text text-lg font-semibold tracking-tight">Edit transaksi</h3>
-                        <p className="muted-text text-sm">Perbarui data yang salah input tanpa hapus transaksi.</p>
-                      </div>
-                      <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
-                    </div>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code, subcategory: '' })}>
-                        <option value="income">Pemasukan</option>
-                        <option value="expense">Pengeluaran</option>
-                      </select>
-                      <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
-                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value, subcategory: '' })}>
-                        {categories[editForm.type].map((category) => (
-                          <option key={category.code} value={category.code}>{category.label}</option>
-                        ))}
-                      </select>
-                      <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
-                        <option value="">Tanpa subkategori</option>
-                        {editSubcategoryOptions.map((subcategory) => (
-                          <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
-                        ))}
-                      </select>
-                      <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
-                    </div>
-                    <div className="mt-4 flex justify-end">
-                      <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={saveTransactionEdit}>Simpan perubahan</button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
               <div className="px-3 pb-3 sm:px-4 sm:pb-4">
                 {filteredTransactions.map((item) => (
                   <div key={item.id} className="grid gap-3 rounded-2xl p-4 transition-all duration-200 ease-out hover:bg-[var(--row-hover)] hover:shadow-sm sm:grid-cols-[1fr_auto] sm:items-center">
@@ -986,9 +977,9 @@ export default function Home() {
               <div className="surface-card rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                 <div className="space-y-2">
                   <h2 className="heading-text text-xl font-semibold tracking-tight">Export data</h2>
-                  <p className="muted-text text-sm leading-6">Unduh data transaksi berdasarkan filter export di halaman ini, tanpa mengikuti filter riwayat.</p>
+                  <p className="muted-text text-sm leading-6">Pilih periode dan filter yang ingin dibawa ke file export. Filter di halaman ini berdiri sendiri, tidak mengikuti riwayat.</p>
                 </div>
-                <div className="mt-6 grid gap-4">
+                <div className="mt-6 grid gap-5">
                   <div className="grid gap-4 md:grid-cols-3">
                     <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={exportFilters.month} onChange={(event) => setExportFilters({ ...exportFilters, month: event.target.value })} />
                     <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={exportFilters.type} onChange={(event) => setExportFilters({ ...exportFilters, type: event.target.value, category: '' })}>
@@ -1002,6 +993,11 @@ export default function Home() {
                         <option key={category.code} value={category.code}>{category.label}</option>
                       ))}
                     </select>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <SummaryTile label="1. Periode" value={monthLabel(exportFilters.month)} />
+                    <SummaryTile label="2. Tipe" value={exportFilters.type ? (exportFilters.type === 'income' ? 'Pemasukan' : 'Pengeluaran') : 'Semua tipe'} />
+                    <SummaryTile label="3. Kategori" value={exportFilters.category ? (allCategories.find((category) => category.code === exportFilters.category)?.label || exportFilters.category) : 'Semua kategori'} />
                   </div>
                   <div className="flex justify-start">
                     <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50" onClick={exportCsv} disabled={!token}>Export CSV</button>
@@ -1025,6 +1021,43 @@ export default function Home() {
           </footer>
         </div>
       </div>
+
+      {canViewDashboard && editingTransaction ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="surface-card max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="heading-text text-xl font-semibold tracking-tight">Edit transaksi</h3>
+                <p className="muted-text mt-1 text-sm leading-6">Perbarui data yang salah input tanpa menghapus transaksi.</p>
+              </div>
+              <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={cancelEditTransaction}>Tutup</button>
+            </div>
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code, subcategory: '' })}>
+                <option value="income">Pemasukan</option>
+                <option value="expense">Pengeluaran</option>
+              </select>
+              <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
+              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value, subcategory: '' })}>
+                {categories[editForm.type].map((category) => (
+                  <option key={category.code} value={category.code}>{category.label}</option>
+                ))}
+              </select>
+              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
+                <option value="">Tanpa subkategori</option>
+                {editSubcategoryOptions.map((subcategory) => (
+                  <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
+                ))}
+              </select>
+              <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md md:col-span-2" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
+              <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={saveTransactionEdit}>Simpan perubahan</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {canViewDashboard && isCategoryModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
@@ -1123,9 +1156,23 @@ function StatusPanel({ title, children, tone = 'default' }) {
   );
 }
 
-function SummaryTile({ label, value }) {
+function InlineStat({ label, value }) {
   return (
-    <div className="surface-soft rounded-2xl p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
+    <div className="rounded-2xl bg-white/10 p-4">
+      <p className="text-xs font-medium uppercase tracking-[0.08em] text-white/75">{label}</p>
+      <p className="mt-2 text-lg font-semibold tracking-tight text-white">{value}</p>
+    </div>
+  );
+}
+
+function SummaryTile({ label, value, accent = 'default' }) {
+  const accentClass = accent === 'success'
+    ? 'border-[var(--primary)]/20 bg-[color-mix(in_srgb,var(--primary)_10%,var(--surface-soft))]'
+    : accent === 'danger'
+      ? 'border-[var(--danger)]/20 bg-[color-mix(in_srgb,var(--danger)_10%,var(--surface-soft))]'
+      : 'border-transparent';
+  return (
+    <div className={`surface-soft rounded-2xl border p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md ${accentClass}`}>
       <p className="muted-text text-xs font-medium uppercase tracking-[0.08em]">{label}</p>
       <p className="heading-text mt-2 text-sm font-semibold leading-6">{value}</p>
     </div>
