@@ -9,6 +9,7 @@ const pollingTimeoutSeconds = Math.max(1, Number(process.env.TELEGRAM_POLL_TIMEO
 const defaultBotCommands = [
   { command: 'mulai', description: 'Mulai dan hubungkan akun' },
   { command: 'bantuan', description: 'Lihat menu Budgetin' },
+  { command: 'tentang', description: 'Info web, admin, dan privasi' },
   { command: 'catat', description: 'Cara catat transaksi' },
   { command: 'lihat', description: 'Lihat riwayat dan ringkasan' },
   { command: 'export', description: 'Export data transaksi' },
@@ -89,6 +90,10 @@ async function handleMessage(message) {
     const account = await fetchTelegramAccount(message.from.id).catch(() => null);
     if (account?.is_admin) await setupAdminBotCommands(chatId);
     return sendHelpMessage(chatId, account);
+  }
+
+  if (['/tentang', '/about'].includes(command)) {
+    return sendAboutMessage(chatId);
   }
 
   const account = await ensureRegistered(message);
@@ -320,31 +325,10 @@ async function sendStartMessage(message) {
         [
           `Halo ${name}, Telegram kamu sudah terhubung ke Budgetin.`,
           '',
-          'Catat uang harian lewat Telegram, lalu lihat laporan lengkap di web.',
+          'Kalau sudah terhubung, ketik /bantuan untuk lihat menu lengkap.',
           '',
-          'Catat cepat:',
-          '/makan nasi padang 18000',
-          '/gaji april 7000000',
-          '',
-          'Lihat menu:',
-          '/bantuan',
-          '',
-        'Dashboard web:',
-        webAppUrl,
-        '',
-        account.is_verified
-          ? 'Dashboard lengkap sudah aktif.'
-          : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
-        '',
-        'Privasi kamu aman:',
-        '- Admin tidak dapat melihat detail transaksi harian kamu',
-        '- Admin hanya melihat status akun dan ringkasan sistem',
-        '',
-        'Admin Budgetin:',
-        '081390195600',
-        '',
-        'Kalau kamu ganti nomor Telegram, ketik /hubungkan_ulang.',
-      ].join('\n'),
+          'Untuk info lebih lanjut tentang web, admin, dan privasi, ketik /tentang.',
+        ].join('\n'),
         { reply_markup: { remove_keyboard: true } },
       );
     }
@@ -355,29 +339,14 @@ async function sendStartMessage(message) {
   return requestPhoneNumber(chatId, [
     'Selamat datang di Budgetin.',
     '',
-    'Budgetin membantu kamu mencatat pemasukan dan pengeluaran harian lewat Telegram.',
+    'Budgetin membantu kamu mencatat pemasukan dan pengeluaran lewat Telegram.',
     '',
     'Langkah pertama:',
-    'Tekan tombol Share Phone Number di bawah ini untuk menghubungkan Telegram kamu.',
+    'Tekan tombol Share Phone Number di bawah untuk menghubungkan akun kamu.',
     '',
-    'Setelah akun terhubung, kamu bisa langsung catat transaksi seperti ini:',
+    'Kalau sudah terhubung, ketik /bantuan untuk lihat menu lengkap.',
     '',
-    '/makan nasi padang 18000',
-    '/gaji april 7000000',
-    '',
-    'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
-    '',
-    'Privasi kamu aman:',
-    '- Admin tidak dapat melihat detail transaksi harian kamu',
-    '- Admin hanya melihat status akun dan ringkasan sistem',
-    '',
-    'Admin Budgetin:',
-    '081390195600',
-    '',
-    'Untuk melihat dashboard, filter, export, dan laporan lengkap, buka web Budgetin:',
-    webAppUrl,
-    '',
-    'Setelah terhubung, ketik /bantuan untuk melihat menu yang tersedia.',
+    'Untuk info lebih lanjut tentang web, admin, dan privasi, ketik /tentang.',
   ]);
 }
 
@@ -446,6 +415,9 @@ function sendHelpMessage(chatId, account = null) {
       '',
       '/akun',
       'Untuk ubah nama, hubungkan nomor, atau hapus akun.',
+      '',
+      '/tentang',
+      'Untuk lihat info web, admin, dan privasi.',
       ...adminLines,
       '',
       'Catatan penting:',
@@ -456,6 +428,24 @@ function sendHelpMessage(chatId, account = null) {
       `Web Budgetin: ${webAppUrl}`,
       '',
       'Jika belum terdaftar, ketik /mulai lalu tekan Share Phone Number.',
+    ].join('\n'),
+    { reply_markup: { remove_keyboard: true } },
+  );
+}
+
+function sendAboutMessage(chatId) {
+  return sendMessage(
+    chatId,
+    [
+      'Web Budgetin:',
+      webAppUrl,
+      '',
+      'Admin Budgetin:',
+      '081390195600',
+      '',
+      'Privasi kamu tetap dijaga:',
+      '- Data transaksi kamu tetap bersifat pribadi.',
+      '- Admin tidak dapat melihat detail transaksi harian kamu.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
@@ -564,7 +554,7 @@ function sendLegacyHelpMessage(chatId) {
       '/makan, /minum, /bensin, /transport, /lain',
       '/gaji, /freelance',
       '/ringkasan, /riwayat',
-      '/export, /nama, /hapus, /hapus_akun',
+      '/export, /nama, /hapus, /hapus_akun, /tentang',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
