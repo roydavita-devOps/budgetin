@@ -423,11 +423,6 @@ function sendHelpMessage(chatId, account = null) {
       'Catatan penting:',
       'Nominal selalu ditulis di belakang tanpa titik, koma, atau Rp.',
       'Contoh benar: /makan nasi padang 18000',
-      '',
-      'Admin Budgetin: 081390195600',
-      `Web Budgetin: ${webAppUrl}`,
-      '',
-      'Jika belum terdaftar, ketik /mulai lalu tekan Share Phone Number.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
