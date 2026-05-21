@@ -20,6 +20,7 @@ const adminBotCommands = [
   { command: 'admin', description: 'Menu admin Budgetin' },
   { command: 'admin_user', description: 'Lihat data user berdasarkan status' },
   { command: 'admin_ringkasan', description: 'Lihat ringkasan agregat' },
+  { command: 'admin_broadcast', description: 'Kirim pesan ke semua user aktif' },
 ];
 
 let offset = 0;
@@ -217,6 +218,11 @@ async function handleMessage(message) {
     return sendAdminPlatformSummary(message);
   }
 
+  if (['/admin_broadcast', '/broadcast'].includes(command)) {
+    if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
+    return sendAdminBroadcast(message, text);
+  }
+
   if (['/admin_verifikasi_user', '/admin_verify_user'].includes(command)) {
     if (!account.is_admin) return sendMessage(chatId, 'Command ini khusus admin Budgetin.');
     return decideUserVerification(message, text, 'verify');
@@ -394,6 +400,9 @@ function sendHelpMessage(chatId, account = null) {
         '',
         '/admin_ringkasan',
         'Lihat ringkasan agregat tanpa detail transaksi user.',
+        '',
+        '/admin_broadcast isi pesan',
+        'Kirim broadcast ke semua user Telegram yang aktif.',
       ]
     : [];
 
@@ -458,10 +467,76 @@ function sendAdminHelp(chatId) {
       '/admin_ringkasan',
       'Lihat jumlah transaksi dan ringkasan agregat. Nominal disembunyikan jika user aktif bulan ini kurang dari 5.',
       '',
+      '/admin_broadcast isi pesan',
+      'Kirim pesan ke semua user Telegram yang aktif.',
+      '',
       'Command verifikasi, blokir, dan pulihkan hanya muncul di konteks daftar user yang sesuai.',
     ].join('\n'),
     { reply_markup: { remove_keyboard: true } },
   );
+}
+
+async function sendAdminBroadcast(message, text) {
+  const chatId = message.chat.id;
+  const messageText = text.replace(/^\/(?:admin_broadcast|broadcast)\s*/i, '').trim();
+
+  if (!messageText) {
+    return sendMessage(
+      chatId,
+      [
+        'Tulis isi broadcast setelah command.',
+        '',
+        'Contoh:',
+        '/admin_broadcast Budgetin maintenance malam ini pukul 23.00 WIB.',
+      ].join('\n'),
+    );
+  }
+
+  try {
+    const response = await fetch(`${backendUrl}/telegram/admin/broadcast`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({
+        admin_telegram_user_id: String(message.from.id),
+        message: messageText,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Gagal mengambil target broadcast');
+
+    const chatIds = Array.isArray(body.data?.telegram_chat_ids) ? body.data.telegram_chat_ids : [];
+    if (!chatIds.length) {
+      return sendMessage(chatId, 'Tidak ada user aktif yang bisa menerima broadcast.');
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const targetChatId of chatIds) {
+      try {
+        await sendMessage(targetChatId, messageText);
+        successCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    return sendMessage(
+      chatId,
+      [
+        'Broadcast selesai.',
+        '',
+        `Target: ${formatNumber(chatIds.length)}`,
+        `Terkirim: ${formatNumber(successCount)}`,
+        `Gagal: ${formatNumber(failedCount)}`,
+      ].join('\n'),
+    );
+  } catch (error) {
+    return sendMessage(chatId, `Gagal: ${error.message}`);
+  }
 }
 
 function sendRecordHelp(chatId) {

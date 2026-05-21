@@ -1627,6 +1627,35 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
   });
 });
 
+app.post('/telegram/admin/broadcast', botInternalRequired, async (req, res) => {
+  const admin = await requireAdminTelegramUser(req, res);
+  if (!admin) return;
+
+  const message = String(req.body.message || '').trim();
+  if (!message) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  const result = await query(
+    `SELECT DISTINCT ON (u.id)
+       ta.telegram_chat_id
+     FROM users u
+     JOIN telegram_accounts ta ON ta.user_id = u.id
+     WHERE u.is_admin = FALSE
+       AND u.is_blocked = FALSE
+       AND u.is_deleted = FALSE
+       AND ta.telegram_chat_id IS NOT NULL
+       AND ta.telegram_chat_id <> ''
+     ORDER BY u.id, ta.linked_at DESC`,
+  );
+
+  res.json({
+    data: {
+      telegram_chat_ids: result.rows.map((row) => row.telegram_chat_id),
+    },
+  });
+});
+
 app.patch('/telegram/admin/users/:telegramUserId', botInternalRequired, async (req, res) => {
   const admin = await requireAdminTelegramUser(req, res);
   if (!admin) return;
