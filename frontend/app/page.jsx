@@ -199,6 +199,7 @@ export default function Home() {
   const [subcategoryView, setSubcategoryView] = useState({ type: 'expense', category: 'food_drink' });
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isSubcategoryDrawerOpen, setIsSubcategoryDrawerOpen] = useState(false);
+  const [selectedSubcategoryKey, setSelectedSubcategoryKey] = useState('');
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -234,6 +235,17 @@ export default function Home() {
   const selectedCategorySubcategoryCount = subcategorySummary.filter((item) => item.key !== '__default__').length;
   const currentTypeTotal = subcategoryView.type === 'income' ? periodTotals.income : periodTotals.expense;
   const selectedCategoryShare = currentTypeTotal ? Math.round((selectedCategoryTotal / currentTypeTotal) * 100) : 0;
+  const selectedSubcategoryItem = subcategorySummary.find((item) => item.key === selectedSubcategoryKey) || null;
+  const selectedSubcategoryTransactions = useMemo(() => {
+    if (!selectedSubcategoryKey) return [];
+    return transactions
+      .filter((item) => {
+        if (item.type !== subcategoryView.type || item.category !== subcategoryView.category) return false;
+        const itemKey = item.subcategory || '__default__';
+        return itemKey === selectedSubcategoryKey;
+      })
+      .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+  }, [transactions, subcategoryView.type, subcategoryView.category, selectedSubcategoryKey]);
   const customCategoryGroups = useMemo(() => {
     return customCategories.reduce((groups, item) => {
       const key = `${item.type}:${item.parent_category}`;
@@ -576,6 +588,19 @@ export default function Home() {
     loadCategories().catch(console.error);
   }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
 
+  useEffect(() => {
+    if (!isSubcategoryDrawerOpen) return;
+    if (!subcategorySummary.length) {
+      setSelectedSubcategoryKey('');
+      return;
+    }
+
+    const stillExists = subcategorySummary.some((item) => item.key === selectedSubcategoryKey);
+    if (!stillExists) {
+      setSelectedSubcategoryKey(subcategorySummary[0].key);
+    }
+  }, [isSubcategoryDrawerOpen, subcategorySummary, selectedSubcategoryKey]);
+
   function toggleTheme() {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   }
@@ -593,6 +618,7 @@ export default function Home() {
 
   function openSubcategoryDrawer(type, category) {
     setSubcategoryView({ type, category });
+    setSelectedSubcategoryKey('');
     setIsSubcategoryDrawerOpen(true);
   }
 
@@ -1028,11 +1054,18 @@ export default function Home() {
                 <div className="grid gap-3">
                   {subcategorySummary.length ? subcategorySummary.map((item) => {
                     const percentage = selectedCategoryTotal ? (item.total / selectedCategoryTotal) * 100 : 0;
+                    const isActive = selectedSubcategoryKey === item.key;
                     return (
-                      <div key={item.key} className="surface-soft rounded-[20px] p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
+                      <button
+                        key={item.key}
+                        className={isActive
+                          ? 'surface-soft w-full rounded-[20px] border border-[var(--primary)] p-4 text-left shadow-sm transition-all duration-200 ease-out'
+                          : 'surface-soft w-full rounded-[20px] p-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
+                        onClick={() => setSelectedSubcategoryKey(item.key)}
+                      >
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <p className="heading-text text-sm font-semibold">{item.label}</p>
+                            <p className={isActive ? 'brand-text text-sm font-semibold' : 'heading-text text-sm font-semibold'}>{item.label}</p>
                             <p className="muted-text mt-1 text-xs">{percentage.toFixed(0)}% dari {selectedCategoryMeta?.label || 'kategori ini'}</p>
                           </div>
                           <p className="heading-text text-sm font-semibold">{formatCurrency(item.total)}</p>
@@ -1046,7 +1079,7 @@ export default function Home() {
                             }}
                           />
                         </div>
-                      </div>
+                      </button>
                     );
                   }) : (
                     <div className="surface-soft rounded-2xl p-5">
@@ -1055,6 +1088,46 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+
+                {selectedSubcategoryItem ? (
+                  <div className="mt-6 border-t border-[var(--border-soft)] pt-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="heading-text text-lg font-semibold tracking-tight">Transaksi dalam {selectedSubcategoryItem.label}</h3>
+                        <p className="muted-text mt-1 text-sm leading-6">
+                          Menampilkan {Math.min(selectedSubcategoryTransactions.length, 10)} dari {formatNumber(selectedSubcategoryTransactions.length)} transaksi terbaru.
+                        </p>
+                      </div>
+                      <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">
+                        {formatCurrency(selectedSubcategoryItem.total)}
+                      </p>
+                    </div>
+
+                    <div className="mt-4 grid gap-3">
+                      {selectedSubcategoryTransactions.slice(0, 10).map((item) => (
+                        <div key={item.id} className="surface-soft rounded-[18px] p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <p className="heading-text truncate text-sm font-semibold">{item.note || 'Tanpa catatan'}</p>
+                              <p className="muted-text mt-1 text-xs">
+                                {new Date(item.created_at).toLocaleString('id-ID')}
+                              </p>
+                            </div>
+                            <p className={item.type === 'income' ? 'brand-text text-sm font-semibold' : 'danger-text text-sm font-semibold'}>
+                              {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+
+                      {!selectedSubcategoryTransactions.length ? (
+                        <div className="surface-soft rounded-2xl p-5">
+                          <p className="muted-text text-sm">Belum ada transaksi di sub-kategori ini.</p>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
