@@ -200,6 +200,7 @@ export default function Home() {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isSubcategoryDrawerOpen, setIsSubcategoryDrawerOpen] = useState(false);
   const [selectedSubcategoryKey, setSelectedSubcategoryKey] = useState('');
+  const [isSubcategoryTransactionsModalOpen, setIsSubcategoryTransactionsModalOpen] = useState(false);
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -608,6 +609,7 @@ export default function Home() {
   function openCategoryModal() {
     setCategoryMessage('');
     setIsSubcategoryDrawerOpen(false);
+    setIsSubcategoryTransactionsModalOpen(false);
     setIsCategoryModalOpen(true);
   }
 
@@ -624,10 +626,21 @@ export default function Home() {
 
   function closeSubcategoryDrawer() {
     setIsSubcategoryDrawerOpen(false);
+    setIsSubcategoryTransactionsModalOpen(false);
+  }
+
+  function openSubcategoryTransactionsModal(key) {
+    setSelectedSubcategoryKey(key);
+    setIsSubcategoryTransactionsModalOpen(true);
+  }
+
+  function closeSubcategoryTransactionsModal() {
+    setIsSubcategoryTransactionsModalOpen(false);
   }
 
   function selectSection(sectionId) {
     setIsSubcategoryDrawerOpen(false);
+    setIsSubcategoryTransactionsModalOpen(false);
     setActiveSection(sectionId);
   }
 
@@ -1061,7 +1074,7 @@ export default function Home() {
                         className={isActive
                           ? 'surface-soft w-full rounded-[20px] border border-[var(--primary)] p-4 text-left shadow-sm transition-all duration-200 ease-out'
                           : 'surface-soft w-full rounded-[20px] p-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md'}
-                        onClick={() => setSelectedSubcategoryKey(item.key)}
+                        onClick={() => openSubcategoryTransactionsModal(item.key)}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div>
@@ -1088,47 +1101,57 @@ export default function Home() {
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-                {selectedSubcategoryItem ? (
-                  <div className="mt-6 border-t border-[var(--border-soft)] pt-6">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="heading-text text-lg font-semibold tracking-tight">Transaksi dalam {selectedSubcategoryItem.label}</h3>
-                        <p className="muted-text mt-1 text-sm leading-6">
-                          Menampilkan {Math.min(selectedSubcategoryTransactions.length, 10)} dari {formatNumber(selectedSubcategoryTransactions.length)} transaksi terbaru.
-                        </p>
-                      </div>
-                      <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">
-                        {formatCurrency(selectedSubcategoryItem.total)}
+      {canViewDashboard && isSubcategoryTransactionsModalOpen && selectedSubcategoryItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="surface-card max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="muted-text text-xs font-medium uppercase tracking-[0.08em]">
+                  {selectedCategoryMeta?.label || 'Kategori'}
+                </p>
+                <h3 className="heading-text mt-2 text-xl font-semibold tracking-tight">
+                  Transaksi dalam {selectedSubcategoryItem.label}
+                </h3>
+                <p className="muted-text mt-1 text-sm leading-6">
+                  Menampilkan {Math.min(selectedSubcategoryTransactions.length, 10)} dari {formatNumber(selectedSubcategoryTransactions.length)} transaksi terbaru.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">
+                  {formatCurrency(selectedSubcategoryItem.total)}
+                </p>
+                <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={closeSubcategoryTransactionsModal}>Tutup</button>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3">
+              {selectedSubcategoryTransactions.slice(0, 10).map((item) => (
+                <div key={item.id} className="surface-soft rounded-[18px] p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="heading-text truncate text-sm font-semibold">{item.note || 'Tanpa catatan'}</p>
+                      <p className="muted-text mt-1 text-xs">
+                        {new Date(item.created_at).toLocaleString('id-ID')}
                       </p>
                     </div>
-
-                    <div className="mt-4 grid gap-3">
-                      {selectedSubcategoryTransactions.slice(0, 10).map((item) => (
-                        <div key={item.id} className="surface-soft rounded-[18px] p-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                              <p className="heading-text truncate text-sm font-semibold">{item.note || 'Tanpa catatan'}</p>
-                              <p className="muted-text mt-1 text-xs">
-                                {new Date(item.created_at).toLocaleString('id-ID')}
-                              </p>
-                            </div>
-                            <p className={item.type === 'income' ? 'brand-text text-sm font-semibold' : 'danger-text text-sm font-semibold'}>
-                              {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-
-                      {!selectedSubcategoryTransactions.length ? (
-                        <div className="surface-soft rounded-2xl p-5">
-                          <p className="muted-text text-sm">Belum ada transaksi di sub-kategori ini.</p>
-                        </div>
-                      ) : null}
-                    </div>
+                    <p className={item.type === 'income' ? 'brand-text text-sm font-semibold' : 'danger-text text-sm font-semibold'}>
+                      {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
+                    </p>
                   </div>
-                ) : null}
-              </div>
+                </div>
+              ))}
+
+              {!selectedSubcategoryTransactions.length ? (
+                <div className="surface-soft rounded-2xl p-5">
+                  <p className="muted-text text-sm">Belum ada transaksi di sub-kategori ini.</p>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
