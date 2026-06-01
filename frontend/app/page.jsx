@@ -193,6 +193,10 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState('dashboard');
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [editForm, setEditForm] = useState({ type: 'expense', amount: '', category: '', subcategory: '', note: '' });
+  const [isBulkSelectMode, setIsBulkSelectMode] = useState(false);
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
+  const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
+  const [bulkEditForm, setBulkEditForm] = useState({ category: '', subcategory: '' });
   const [customCategories, setCustomCategories] = useState([]);
   const [categoryForm, setCategoryForm] = useState({ type: 'expense', parent_category: 'food_drink', name: '' });
   const [categoryMessage, setCategoryMessage] = useState('');
@@ -223,6 +227,19 @@ export default function Home() {
 
   const periodTotals = useMemo(() => summarizeTransactions(transactions), [transactions]);
   const filteredTotals = useMemo(() => summarizeTransactions(filteredTransactions), [filteredTransactions]);
+  const selectedTransactions = useMemo(
+    () => filteredTransactions.filter((item) => selectedTransactionIds.includes(item.id)),
+    [filteredTransactions, selectedTransactionIds],
+  );
+  const selectedTransactionType = useMemo(() => {
+    if (!selectedTransactions.length) return '';
+    const uniqueTypes = [...new Set(selectedTransactions.map((item) => item.type))];
+    return uniqueTypes.length === 1 ? uniqueTypes[0] : '';
+  }, [selectedTransactions]);
+  const bulkEditSubcategoryOptions = useMemo(() => {
+    if (!selectedTransactionType || !bulkEditForm.category) return [];
+    return customCategories.filter((item) => item.type === selectedTransactionType && item.parent_category === bulkEditForm.category);
+  }, [customCategories, selectedTransactionType, bulkEditForm.category]);
   const expenseSummary = useMemo(() => groupByCategory(transactions, 'expense'), [transactions]);
   const incomeSummary = useMemo(() => groupByCategory(transactions, 'income'), [transactions]);
   const trend = useMemo(() => buildTrend(transactions, period), [transactions, period]);
@@ -446,6 +463,114 @@ export default function Home() {
     setTransactions((current) => current.filter((item) => item.id !== itemId));
   }
 
+  function toggleBulkSelectMode() {
+    setIsBulkSelectMode((current) => {
+      if (current) {
+        setSelectedTransactionIds([]);
+        setIsBulkEditModalOpen(false);
+      }
+      return !current;
+    });
+  }
+
+  function toggleTransactionSelection(transactionId) {
+    setSelectedTransactionIds((current) => (
+      current.includes(transactionId)
+        ? current.filter((id) => id !== transactionId)
+        : [...current, transactionId]
+    ));
+  }
+
+  function selectAllVisibleTransactions() {
+    setSelectedTransactionIds(filteredTransactions.map((item) => item.id));
+  }
+
+  function clearSelectedTransactions() {
+    setSelectedTransactionIds([]);
+  }
+
+  function openBulkEditModal() {
+    if (!selectedTransactions.length || !selectedTransactionType) return;
+    setBulkEditForm({
+      category: selectedTransactions[0]?.category || categories[selectedTransactionType][0].code,
+      subcategory: '',
+    });
+    setIsBulkEditModalOpen(true);
+  }
+
+  function closeBulkEditModal() {
+    setIsBulkEditModalOpen(false);
+    setBulkEditForm({ category: '', subcategory: '' });
+  }
+
+  async function saveBulkTransactionEdit() {
+    if (!selectedTransactions.length || !selectedTransactionType) return;
+
+    const updates = await Promise.allSettled(
+      selectedTransactions.map((item) => request(`/transactions/${item.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          type: item.type,
+          amount: Number(item.amount),
+          category: bulkEditForm.category,
+          subcategory: bulkEditForm.subcategory,
+          note: item.note || '',
+        }),
+      })),
+    );
+
+    const updatedById = new Map();
+    let failedCount = 0;
+    updates.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        updatedById.set(selectedTransactions[index].id, result.value.data);
+      } else {
+        failedCount += 1;
+      }
+    });
+
+    setTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
+    if (updatedById.size > 0) {
+      setSelectedTransactionIds([]);
+      setIsBulkSelectMode(false);
+      closeBulkEditModal();
+    }
+    if (failedCount > 0) {
+      window.alert(`${failedCount} transaksi gagal diperbarui. Sisanya berhasil.`);
+    }
+  }
+
+  async function deleteSelectedTransactions() {
+    if (!selectedTransactions.length) return;
+    const confirmed = window.confirm(`Hapus ${selectedTransactions.length} transaksi terpilih?`);
+    if (!confirmed) return;
+
+    const results = await Promise.allSettled(
+      selectedTransactions.map((item) => request(`/transactions/${item.id}`, {
+        method: 'DELETE',
+        headers,
+      })),
+    );
+
+    const deletedIds = new Set();
+    let failedCount = 0;
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        deletedIds.add(selectedTransactions[index].id);
+      } else {
+        failedCount += 1;
+      }
+    });
+
+    setTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
+    setSelectedTransactionIds([]);
+    setIsBulkSelectMode(false);
+    if (failedCount > 0) {
+      window.alert(`${failedCount} transaksi gagal dihapus. Sisanya berhasil.`);
+    }
+  }
+
   async function createCustomCategory() {
     try {
       setCategoryMessage('');
@@ -539,6 +664,9 @@ export default function Home() {
     setToken('');
     setUser(null);
     setTransactions([]);
+    setIsBulkSelectMode(false);
+    setSelectedTransactionIds([]);
+    setIsBulkEditModalOpen(false);
     setOtpCode('');
     setAuthMessage('Kamu sudah logout.');
   }
@@ -590,6 +718,12 @@ export default function Home() {
   }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
 
   useEffect(() => {
+    if (!isBulkSelectMode) return;
+    const visibleIds = new Set(filteredTransactions.map((item) => item.id));
+    setSelectedTransactionIds((current) => current.filter((id) => visibleIds.has(id)));
+  }, [isBulkSelectMode, filteredTransactions]);
+
+  useEffect(() => {
     if (!isSubcategoryDrawerOpen) return;
     if (!subcategorySummary.length) {
       setSelectedSubcategoryKey('');
@@ -639,6 +773,9 @@ export default function Home() {
   }
 
   function selectSection(sectionId) {
+    setIsBulkSelectMode(false);
+    setSelectedTransactionIds([]);
+    setIsBulkEditModalOpen(false);
     setIsSubcategoryDrawerOpen(false);
     setIsSubcategoryTransactionsModalOpen(false);
     setActiveSection(sectionId);
@@ -867,6 +1004,9 @@ export default function Home() {
                   </div>
                   <div className="flex items-center gap-2">
                     <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">{formatNumber(filteredTotals.count)} transaksi</p>
+                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={toggleBulkSelectMode}>
+                      {isBulkSelectMode ? 'Batal pilih' : 'Pilih banyak'}
+                    </button>
                     <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', sort: 'newest', search: '' })}>Reset filter</button>
                   </div>
                 </div>
@@ -895,10 +1035,44 @@ export default function Home() {
                     <option value="amount_asc">Nominal terkecil</option>
                   </select>
                 </div>
+                {isBulkSelectMode ? (
+                  <div className="surface-soft mt-4 flex flex-col gap-3 rounded-[20px] p-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="heading-text text-sm font-semibold">{formatNumber(selectedTransactions.length)} transaksi dipilih</p>
+                      <p className="muted-text mt-1 text-xs">
+                        {selectedTransactions.length && !selectedTransactionType ? 'Edit massal hanya bisa untuk transaksi dengan tipe yang sama.' : 'Kamu bisa hapus bersama atau ubah kategori dan sub-kategori sekaligus.'}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={selectAllVisibleTransactions}>
+                        Pilih semua terlihat
+                      </button>
+                      <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={clearSelectedTransactions}>
+                        Kosongkan
+                      </button>
+                      <button className="brand-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50" onClick={openBulkEditModal} disabled={!selectedTransactions.length || !selectedTransactionType}>
+                        Edit bersama
+                      </button>
+                      <button className="danger-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50" onClick={deleteSelectedTransactions} disabled={!selectedTransactions.length}>
+                        Hapus bersama
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <div className="px-3 pb-3 sm:px-4 sm:pb-4">
                 {filteredTransactions.map((item) => (
-                  <div key={item.id} className="grid gap-3 rounded-2xl p-4 transition-all duration-200 ease-out hover:bg-[var(--row-hover)] hover:shadow-sm sm:grid-cols-[1fr_auto] sm:items-center">
+                  <div key={item.id} className={`grid gap-3 rounded-2xl p-4 transition-all duration-200 ease-out hover:bg-[var(--row-hover)] hover:shadow-sm ${isBulkSelectMode ? 'sm:grid-cols-[auto_1fr_auto]' : 'sm:grid-cols-[1fr_auto]'} sm:items-center`}>
+                    {isBulkSelectMode ? (
+                      <label className="flex items-center justify-center">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-[var(--primary)]"
+                          checked={selectedTransactionIds.includes(item.id)}
+                          onChange={() => toggleTransactionSelection(item.id)}
+                        />
+                      </label>
+                    ) : null}
                     <div className="min-w-0">
                       <p className="heading-text font-semibold tracking-tight">
                         {item.category_label || item.category}
@@ -910,18 +1084,22 @@ export default function Home() {
                       <p className={item.type === 'income' ? 'brand-text text-right font-bold' : 'danger-text text-right font-bold'}>
                         {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
                       </p>
-                      <button
-                        className="soft-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => startEditTransaction(item)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
-                        onClick={() => deleteTransaction(item.id)}
-                      >
-                        Hapus
-                      </button>
+                      {!isBulkSelectMode ? (
+                        <>
+                          <button
+                            className="soft-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
+                            onClick={() => startEditTransaction(item)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
+                            onClick={() => deleteTransaction(item.id)}
+                          >
+                            Hapus
+                          </button>
+                        </>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -1014,6 +1192,63 @@ export default function Home() {
             <div className="mt-6 flex justify-end gap-3">
               <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
               <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={saveTransactionEdit}>Simpan perubahan</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {canViewDashboard && isBulkEditModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
+          <div className="surface-card w-full max-w-2xl rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="heading-text text-xl font-semibold tracking-tight">Edit transaksi terpilih</h3>
+                <p className="muted-text mt-1 text-sm leading-6">
+                  Ubah kategori dan sub-kategori untuk {formatNumber(selectedTransactions.length)} transaksi sekaligus.
+                </p>
+              </div>
+              <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={closeBulkEditModal}>Tutup</button>
+            </div>
+
+            <div className="surface-soft mt-6 rounded-[20px] p-4">
+              <p className="heading-text text-sm font-semibold">
+                Tipe transaksi: {selectedTransactionType === 'income' ? 'Pemasukan' : 'Pengeluaran'}
+              </p>
+              <p className="muted-text mt-1 text-xs leading-5">
+                Edit massal dibatasi ke kategori dan sub-kategori agar perubahan tetap aman.
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <select
+                className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                value={bulkEditForm.category}
+                onChange={(event) => setBulkEditForm({ category: event.target.value, subcategory: '' })}
+              >
+                {selectedTransactionType ? categories[selectedTransactionType].map((category) => (
+                  <option key={category.code} value={category.code}>{category.label}</option>
+                )) : null}
+              </select>
+              <select
+                className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
+                value={bulkEditForm.subcategory}
+                onChange={(event) => setBulkEditForm({ ...bulkEditForm, subcategory: event.target.value })}
+              >
+                <option value="">Tanpa sub-kategori</option>
+                {bulkEditSubcategoryOptions.map((subcategory) => (
+                  <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold" onClick={closeBulkEditModal}>Batal</button>
+              <button
+                className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
+                onClick={saveBulkTransactionEdit}
+              >
+                Simpan perubahan
+              </button>
             </div>
           </div>
         </div>
