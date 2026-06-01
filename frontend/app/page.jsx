@@ -184,6 +184,7 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
   const [transactions, setTransactions] = useState([]);
+  const [monthlyTrendTransactions, setMonthlyTrendTransactions] = useState([]);
   const [period, setPeriod] = useState('weekly');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
   const [filters, setFilters] = useState({ type: '', category: '', sort: 'newest', search: '' });
@@ -242,7 +243,8 @@ export default function Home() {
   }, [customCategories, selectedTransactionType, bulkEditForm.category]);
   const expenseSummary = useMemo(() => groupByCategory(transactions, 'expense'), [transactions]);
   const incomeSummary = useMemo(() => groupByCategory(transactions, 'income'), [transactions]);
-  const trend = useMemo(() => buildTrend(transactions, period), [transactions, period]);
+  const trendSourceTransactions = period === 'monthly' ? monthlyTrendTransactions : transactions;
+  const trend = useMemo(() => buildTrend(trendSourceTransactions, period), [trendSourceTransactions, period]);
   const balance = periodTotals.income - periodTotals.expense;
   const currentSection = sidebarItems.find((item) => item.id === activeSection) || sidebarItems[0];
   const subcategorySummary = useMemo(() => {
@@ -408,6 +410,22 @@ export default function Home() {
     setTransactions(transactionBody.data);
   }
 
+  async function loadMonthlyTrendData() {
+    if (!token) return;
+    if (!user?.is_verified || user?.is_blocked || user?.is_deleted) {
+      setMonthlyTrendTransactions([]);
+      return;
+    }
+
+    const params = new URLSearchParams({
+      limit: '500',
+      sort: 'oldest',
+    });
+
+    const transactionBody = await request(`/transactions?${params.toString()}`, { headers });
+    setMonthlyTrendTransactions(transactionBody.data);
+  }
+
   async function loadCategories() {
     if (!token || !user?.is_verified || user?.is_blocked || user?.is_deleted) {
       setCustomCategories([]);
@@ -448,6 +466,7 @@ export default function Home() {
       }),
     });
     setTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
+    setMonthlyTrendTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
     cancelEditTransaction();
   }
 
@@ -461,6 +480,7 @@ export default function Home() {
       headers,
     });
     setTransactions((current) => current.filter((item) => item.id !== itemId));
+    setMonthlyTrendTransactions((current) => current.filter((item) => item.id !== itemId));
   }
 
   function toggleBulkSelectMode() {
@@ -531,6 +551,7 @@ export default function Home() {
     });
 
     setTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
+    setMonthlyTrendTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
     if (updatedById.size > 0) {
       setSelectedTransactionIds([]);
       setIsBulkSelectMode(false);
@@ -564,6 +585,7 @@ export default function Home() {
     });
 
     setTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
+    setMonthlyTrendTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
     setSelectedTransactionIds([]);
     setIsBulkSelectMode(false);
     if (failedCount > 0) {
@@ -664,6 +686,7 @@ export default function Home() {
     setToken('');
     setUser(null);
     setTransactions([]);
+    setMonthlyTrendTransactions([]);
     setIsBulkSelectMode(false);
     setSelectedTransactionIds([]);
     setIsBulkEditModalOpen(false);
@@ -712,6 +735,10 @@ export default function Home() {
   useEffect(() => {
     loadData().catch(console.error);
   }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, filters.sort, filters.search]);
+
+  useEffect(() => {
+    loadMonthlyTrendData().catch(console.error);
+  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
 
   useEffect(() => {
     loadCategories().catch(console.error);
