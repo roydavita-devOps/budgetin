@@ -187,7 +187,7 @@ export default function Home() {
   const [monthlyTrendTransactions, setMonthlyTrendTransactions] = useState([]);
   const [period, setPeriod] = useState('weekly');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
-  const [filters, setFilters] = useState({ type: '', category: '', sort: 'newest', search: '' });
+  const [filters, setFilters] = useState({ type: '', category: '', subcategory: '', sort: 'newest', search: '' });
   const [exportFilters, setExportFilters] = useState({ month: currentMonthValue(), type: '', category: '' });
   const [theme, setTheme] = useState(null);
   const [themeReady, setThemeReady] = useState(false);
@@ -219,13 +219,15 @@ export default function Home() {
     return transactions.filter((item) => {
       if (filters.type && item.type !== filters.type) return false;
       if (filters.category && item.category !== filters.category) return false;
+      if (filters.subcategory === '__default__' && item.subcategory) return false;
+      if (filters.subcategory && filters.subcategory !== '__default__' && item.subcategory !== filters.subcategory) return false;
       if (filters.search) {
         const haystack = `${item.category_label || item.category} ${item.subcategory || ''} ${item.note || ''}`.toLowerCase();
         if (!haystack.includes(filters.search.toLowerCase())) return false;
       }
       return true;
     });
-  }, [transactions, filters.type, filters.category, filters.search]);
+  }, [transactions, filters.type, filters.category, filters.subcategory, filters.search]);
 
   const periodTotals = useMemo(() => summarizeTransactions(transactions), [transactions]);
   const filteredTotals = useMemo(() => summarizeTransactions(filteredTransactions), [filteredTransactions]);
@@ -814,6 +816,21 @@ export default function Home() {
     setSubcategoryTransactionsPage(1);
   }
 
+  function openSelectedSubcategoryInHistory() {
+    if (!selectedSubcategoryItem) return;
+
+    setFilters({
+      type: subcategoryView.type,
+      category: subcategoryView.category,
+      subcategory: selectedSubcategoryItem.key === '__default__' ? '__default__' : selectedSubcategoryItem.label,
+      sort: 'newest',
+      search: '',
+    });
+    setIsSubcategoryTransactionsModalOpen(false);
+    setIsSubcategoryDrawerOpen(false);
+    setActiveSection('riwayat');
+  }
+
   function selectSection(sectionId) {
     setIsBulkSelectMode(false);
     setSelectedTransactionIds([]);
@@ -1049,7 +1066,7 @@ export default function Home() {
                     <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={toggleBulkSelectMode}>
                       {isBulkSelectMode ? 'Batal pilih' : 'Pilih banyak'}
                     </button>
-                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', sort: 'newest', search: '' })}>Reset filter</button>
+                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', subcategory: '', sort: 'newest', search: '' })}>Reset filter</button>
                   </div>
                 </div>
                 <div className="surface-soft mt-6 grid gap-3 rounded-[20px] p-4 lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr]">
@@ -1059,7 +1076,7 @@ export default function Home() {
                     value={filters.search}
                     onChange={(event) => setFilters({ ...filters, search: event.target.value })}
                   />
-                  <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value, category: '' })}>
+                    <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value, category: '', subcategory: '' })}>
                     <option value="">Semua tipe</option>
                     <option value="income">Pemasukan</option>
                     <option value="expense">Pengeluaran</option>
@@ -1386,8 +1403,8 @@ export default function Home() {
 
       {canViewDashboard && isSubcategoryTransactionsModalOpen && selectedSubcategoryItem ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
-          <div className="surface-card max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="surface-card flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
+            <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="muted-text text-xs font-medium uppercase tracking-[0.08em]">
                   {selectedCategoryMeta?.label || 'Kategori'}
@@ -1399,15 +1416,22 @@ export default function Home() {
                   {formatNumber(selectedSubcategoryTransactions.length)} transaksi • Halaman {formatNumber(subcategoryTransactionsPage)} dari {formatNumber(subcategoryTransactionsPageCount)}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="surface-soft brand-text rounded-full px-3 py-1 text-sm font-semibold">
                   {formatCurrency(selectedSubcategoryItem.total)}
                 </p>
+                <button
+                  className="soft-button rounded-xl px-3 py-2 text-sm font-semibold"
+                  onClick={openSelectedSubcategoryInHistory}
+                >
+                  Buka di riwayat
+                </button>
                 <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={closeSubcategoryTransactionsModal}>Tutup</button>
               </div>
             </div>
 
-            <div className="mt-6 grid gap-3">
+            <div className="mt-6 flex-1 overflow-y-auto pr-1">
+              <div className="grid gap-3">
               {paginatedSubcategoryTransactions.map((item) => (
                 <div key={item.id} className="surface-soft rounded-[18px] p-4">
                   <div className="flex items-start justify-between gap-4">
@@ -1429,10 +1453,11 @@ export default function Home() {
                   <p className="muted-text text-sm">Belum ada transaksi di sub-kategori ini.</p>
                 </div>
               ) : null}
+              </div>
             </div>
 
             {selectedSubcategoryTransactions.length > subcategoryTransactionsPageSize ? (
-              <div className="mt-6 flex items-center justify-between gap-3 border-t border-[var(--border)] pt-5">
+              <div className="mt-5 flex flex-col gap-3 border-t border-[var(--border)] pt-5 sm:flex-row sm:items-center sm:justify-between">
                 <button
                   className="soft-button rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => setSubcategoryTransactionsPage((current) => Math.max(1, current - 1))}
@@ -1440,7 +1465,7 @@ export default function Home() {
                 >
                   Sebelumnya
                 </button>
-                <p className="muted-text text-sm">
+                <p className="muted-text text-sm sm:text-center">
                   Menampilkan {formatNumber((subcategoryTransactionsPage - 1) * subcategoryTransactionsPageSize + 1)}-
                   {formatNumber(Math.min(subcategoryTransactionsPage * subcategoryTransactionsPageSize, selectedSubcategoryTransactions.length))} dari {formatNumber(selectedSubcategoryTransactions.length)}
                 </p>
