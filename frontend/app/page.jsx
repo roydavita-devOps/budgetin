@@ -206,6 +206,7 @@ export default function Home() {
   const [isSubcategoryDrawerOpen, setIsSubcategoryDrawerOpen] = useState(false);
   const [selectedSubcategoryKey, setSelectedSubcategoryKey] = useState('');
   const [isSubcategoryTransactionsModalOpen, setIsSubcategoryTransactionsModalOpen] = useState(false);
+  const [subcategoryTransactionsPage, setSubcategoryTransactionsPage] = useState(1);
   const refreshPromiseRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
@@ -266,6 +267,12 @@ export default function Home() {
       })
       .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
   }, [transactions, subcategoryView.type, subcategoryView.category, selectedSubcategoryKey]);
+  const subcategoryTransactionsPageSize = 10;
+  const subcategoryTransactionsPageCount = Math.max(1, Math.ceil(selectedSubcategoryTransactions.length / subcategoryTransactionsPageSize));
+  const paginatedSubcategoryTransactions = useMemo(() => {
+    const startIndex = (subcategoryTransactionsPage - 1) * subcategoryTransactionsPageSize;
+    return selectedSubcategoryTransactions.slice(startIndex, startIndex + subcategoryTransactionsPageSize);
+  }, [selectedSubcategoryTransactions, subcategoryTransactionsPage]);
   const customCategoryGroups = useMemo(() => {
     return customCategories.reduce((groups, item) => {
       const key = `${item.type}:${item.parent_category}`;
@@ -763,6 +770,12 @@ export default function Home() {
     }
   }, [isSubcategoryDrawerOpen, subcategorySummary, selectedSubcategoryKey]);
 
+  useEffect(() => {
+    if (subcategoryTransactionsPage > subcategoryTransactionsPageCount) {
+      setSubcategoryTransactionsPage(subcategoryTransactionsPageCount);
+    }
+  }, [subcategoryTransactionsPage, subcategoryTransactionsPageCount]);
+
   function toggleTheme() {
     setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   }
@@ -792,11 +805,13 @@ export default function Home() {
 
   function openSubcategoryTransactionsModal(key) {
     setSelectedSubcategoryKey(key);
+    setSubcategoryTransactionsPage(1);
     setIsSubcategoryTransactionsModalOpen(true);
   }
 
   function closeSubcategoryTransactionsModal() {
     setIsSubcategoryTransactionsModalOpen(false);
+    setSubcategoryTransactionsPage(1);
   }
 
   function selectSection(sectionId) {
@@ -1381,7 +1396,7 @@ export default function Home() {
                   Transaksi dalam {selectedSubcategoryItem.label}
                 </h3>
                 <p className="muted-text mt-1 text-sm leading-6">
-                  Menampilkan {Math.min(selectedSubcategoryTransactions.length, 10)} dari {formatNumber(selectedSubcategoryTransactions.length)} transaksi terbaru.
+                  {formatNumber(selectedSubcategoryTransactions.length)} transaksi • Halaman {formatNumber(subcategoryTransactionsPage)} dari {formatNumber(subcategoryTransactionsPageCount)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1393,7 +1408,7 @@ export default function Home() {
             </div>
 
             <div className="mt-6 grid gap-3">
-              {selectedSubcategoryTransactions.slice(0, 10).map((item) => (
+              {paginatedSubcategoryTransactions.map((item) => (
                 <div key={item.id} className="surface-soft rounded-[18px] p-4">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
@@ -1415,6 +1430,29 @@ export default function Home() {
                 </div>
               ) : null}
             </div>
+
+            {selectedSubcategoryTransactions.length > subcategoryTransactionsPageSize ? (
+              <div className="mt-6 flex items-center justify-between gap-3 border-t border-[var(--border)] pt-5">
+                <button
+                  className="soft-button rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setSubcategoryTransactionsPage((current) => Math.max(1, current - 1))}
+                  disabled={subcategoryTransactionsPage === 1}
+                >
+                  Sebelumnya
+                </button>
+                <p className="muted-text text-sm">
+                  Menampilkan {formatNumber((subcategoryTransactionsPage - 1) * subcategoryTransactionsPageSize + 1)}-
+                  {formatNumber(Math.min(subcategoryTransactionsPage * subcategoryTransactionsPageSize, selectedSubcategoryTransactions.length))} dari {formatNumber(selectedSubcategoryTransactions.length)}
+                </p>
+                <button
+                  className="soft-button rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => setSubcategoryTransactionsPage((current) => Math.min(subcategoryTransactionsPageCount, current + 1))}
+                  disabled={subcategoryTransactionsPage === subcategoryTransactionsPageCount}
+                >
+                  Berikutnya
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
