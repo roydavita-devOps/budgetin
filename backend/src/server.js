@@ -17,6 +17,9 @@ const adminPhoneNumber = normalizePhone(process.env.ADMIN_PHONE_NUMBER || '08139
 const refreshTokenTtlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS || 14);
 const refreshCookieName = process.env.REFRESH_COOKIE_NAME || 'budgetin_refresh_token';
 const refreshCookieSecure = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
+const appTimeZone = 'Asia/Jakarta';
+const jakartaDayStartSql = `(DATE_TRUNC('day', NOW() AT TIME ZONE '${appTimeZone}') AT TIME ZONE '${appTimeZone}')`;
+const jakartaMonthStartSql = `(DATE_TRUNC('month', NOW() AT TIME ZONE '${appTimeZone}') AT TIME ZONE '${appTimeZone}')`;
 
 const CATEGORY_DEFINITIONS = {
   expense: [
@@ -728,23 +731,23 @@ function buildTransactionFilters(userId, queryParams) {
 
   if (/^\d{4}-\d{2}$/.test(month)) {
     params.push(`${month}-01`);
-    filters.push(`created_at >= $${params.length}::date`);
+    filters.push(`created_at >= ($${params.length}::date::timestamp AT TIME ZONE '${appTimeZone}')`);
     params.push(`${month}-01`);
-    filters.push(`created_at < ($${params.length}::date + INTERVAL '1 month')`);
+    filters.push(`created_at < (($${params.length}::date + INTERVAL '1 month') AT TIME ZONE '${appTimeZone}')`);
   } else if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     params.push(date);
-    filters.push(`created_at >= $${params.length}::date`);
+    filters.push(`created_at >= ($${params.length}::date::timestamp AT TIME ZONE '${appTimeZone}')`);
     params.push(date);
-    filters.push(`created_at < ($${params.length}::date + INTERVAL '1 day')`);
+    filters.push(`created_at < (($${params.length}::date + INTERVAL '1 day') AT TIME ZONE '${appTimeZone}')`);
   } else {
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
       params.push(dateFrom);
-      filters.push(`created_at >= $${params.length}::date`);
+      filters.push(`created_at >= ($${params.length}::date::timestamp AT TIME ZONE '${appTimeZone}')`);
     }
 
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
       params.push(dateTo);
-      filters.push(`created_at < ($${params.length}::date + INTERVAL '1 day')`);
+      filters.push(`created_at < (($${params.length}::date + INTERVAL '1 day') AT TIME ZONE '${appTimeZone}')`);
     }
   }
 
@@ -1278,7 +1281,7 @@ app.get('/telegram/admin/user-stats', botInternalRequired, async (req, res) => {
      JOIN users u ON u.id = t.user_id
      WHERE u.is_admin = FALSE
        AND u.is_deleted = FALSE
-       AND t.created_at >= DATE_TRUNC('month', NOW())`,
+       AND t.created_at >= ${jakartaMonthStartSql}`,
   );
 
   res.json({
@@ -1529,19 +1532,19 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
        COUNT(*) FILTER (WHERE is_admin = FALSE AND is_verified = FALSE AND is_blocked = FALSE AND is_deleted = FALSE)::int AS pending_users,
        COUNT(*) FILTER (WHERE is_admin = FALSE AND is_blocked = TRUE AND is_deleted = FALSE)::int AS blocked_users,
        COUNT(*) FILTER (WHERE is_admin = FALSE AND is_deleted = TRUE)::int AS deleted_users,
-       COUNT(*) FILTER (WHERE is_admin = FALSE AND created_at >= CURRENT_DATE)::int AS new_users_today,
+       COUNT(*) FILTER (WHERE is_admin = FALSE AND created_at >= ${jakartaDayStartSql})::int AS new_users_today,
        COUNT(*) FILTER (WHERE is_admin = FALSE AND created_at >= NOW() - INTERVAL '7 days')::int AS new_users_this_week
      FROM users`,
   );
   const counts = await query(
     `SELECT
-       COUNT(*) FILTER (WHERE t.created_at >= CURRENT_DATE)::int AS transactions_today,
+       COUNT(*) FILTER (WHERE t.created_at >= ${jakartaDayStartSql})::int AS transactions_today,
        COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days')::int AS transactions_this_week,
        COUNT(*)::int AS total_transactions,
-       COUNT(*) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS transactions_this_month,
-       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= CURRENT_DATE)::int AS active_users_today,
+       COUNT(*) FILTER (WHERE t.created_at >= ${jakartaMonthStartSql})::int AS transactions_this_month,
+       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= ${jakartaDayStartSql})::int AS active_users_today,
        COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days')::int AS active_users_this_week,
-       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= DATE_TRUNC('month', NOW()))::int AS active_users_this_month
+       COUNT(DISTINCT t.user_id) FILTER (WHERE t.created_at >= ${jakartaMonthStartSql})::int AS active_users_this_month
      FROM transactions t
      JOIN users u ON u.id = t.user_id
      WHERE u.is_admin = FALSE
@@ -1593,7 +1596,7 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
      JOIN users u ON u.id = t.user_id
      WHERE u.is_admin = FALSE
        AND u.is_deleted = FALSE
-       AND t.created_at >= DATE_TRUNC('month', NOW())`,
+       AND t.created_at >= ${jakartaMonthStartSql}`,
   );
 
   const topExpenseCategory = await query(
@@ -1603,7 +1606,7 @@ app.get('/telegram/admin/platform-summary', botInternalRequired, async (req, res
      WHERE u.is_admin = FALSE
        AND u.is_deleted = FALSE
        AND t.type = 'expense'
-       AND t.created_at >= DATE_TRUNC('month', NOW())
+       AND t.created_at >= ${jakartaMonthStartSql}
      GROUP BY t.category
      ORDER BY total DESC
      LIMIT 1`,

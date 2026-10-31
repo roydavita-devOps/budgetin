@@ -28,8 +28,13 @@ const allCategories = [...categories.expense, ...categories.income];
 const categoryMeta = Object.fromEntries(allCategories.map((category) => [category.code, category]));
 
 function currentMonthValue() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}`;
 }
 
 function formatCurrency(value) {
@@ -51,14 +56,34 @@ function parseDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function jakartaDateParts(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
 function dateKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const parts = jakartaDateParts(date);
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function weekKey(date) {
-  const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-  const week = Math.ceil((date.getDate() + firstDay.getDay()) / 7);
+  const parts = jakartaDateParts(date);
+  const firstDay = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, 1));
+  const week = Math.ceil((Number(parts.day) + firstDay.getUTCDay()) / 7);
   return `Minggu ${week}`;
+}
+
+function formatDateTimeWib(value) {
+  return new Date(value).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+}
+
+function formatDateWib(value) {
+  return new Date(value).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' });
 }
 
 function monthLabel(value) {
@@ -67,6 +92,7 @@ function monthLabel(value) {
   return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString('id-ID', {
     month: 'long',
     year: 'numeric',
+    timeZone: 'Asia/Jakarta',
   });
 }
 
@@ -146,7 +172,7 @@ function buildTrend(transactions, period) {
       ? dateKey(date)
       : period === 'weekly'
         ? weekKey(date)
-        : date.toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+        : date.toLocaleDateString('id-ID', { month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' });
 
     const current = grouped.get(key) || { label: key, income: 0, expense: 0 };
     current[item.type] += Number(item.amount || 0);
@@ -169,7 +195,7 @@ function busyDayInsight(transactions) {
     .forEach((item) => {
       const date = parseDate(item.created_at);
       if (!date) return;
-      const label = date.toLocaleDateString('id-ID', { weekday: 'long' });
+      const label = date.toLocaleDateString('id-ID', { weekday: 'long', timeZone: 'Asia/Jakarta' });
       grouped.set(label, (grouped.get(label) || 0) + Number(item.amount || 0));
     });
 
@@ -978,7 +1004,7 @@ export default function Home() {
           {isDeleted && (
             <StatusPanel title="Akun dinonaktifkan" tone="danger">
               Akun Budgetin kamu sedang dinonaktifkan. Hubungi admin jika ingin recovery.
-              {user?.delete_recovery_until ? ` Recovery tersedia sampai ${new Date(user.delete_recovery_until).toLocaleString('id-ID')}.` : ''}
+              {user?.delete_recovery_until ? ` Recovery tersedia sampai ${formatDateTimeWib(user.delete_recovery_until)}.` : ''}
             </StatusPanel>
           )}
 
@@ -1137,7 +1163,7 @@ export default function Home() {
                         {item.category_label || item.category}
                         {item.subcategory ? ` - ${item.subcategory}` : ''}
                       </p>
-                      <p className="muted-text mt-1 text-sm leading-6">{item.note || '-'} - {new Date(item.created_at).toLocaleString('id-ID')}</p>
+                      <p className="muted-text mt-1 text-sm leading-6">{item.note || '-'} - {formatDateTimeWib(item.created_at)}</p>
                     </div>
                     <div className="flex items-center justify-end gap-3">
                       <p className={item.type === 'income' ? 'brand-text text-right font-bold' : 'danger-text text-right font-bold'}>
@@ -1438,7 +1464,7 @@ export default function Home() {
                     <div className="min-w-0">
                       <p className="heading-text truncate text-sm font-semibold">{item.note || 'Tanpa catatan'}</p>
                       <p className="muted-text mt-1 text-xs">
-                        {new Date(item.created_at).toLocaleString('id-ID')}
+                        {formatDateTimeWib(item.created_at)}
                       </p>
                     </div>
                     <p className={item.type === 'income' ? 'brand-text text-sm font-semibold' : 'danger-text text-sm font-semibold'}>
@@ -1548,7 +1574,7 @@ export default function Home() {
                     <div key={item.id} className="surface-soft flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
                       <div>
                         <p className="heading-text text-sm font-semibold">{item.name}</p>
-                        <p className="muted-text mt-1 text-xs">{new Date(item.created_at).toLocaleDateString('id-ID')}</p>
+                        <p className="muted-text mt-1 text-xs">{formatDateWib(item.created_at)}</p>
                       </div>
                       <button className="danger-button rounded-xl px-3 py-2 text-xs font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => removeCustomCategory(item.id)}>Hapus</button>
                     </div>
