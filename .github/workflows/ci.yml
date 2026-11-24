@@ -18,7 +18,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
+      - name: Install frontend dependencies
+        if: matrix.service == 'frontend'
+        run: npm ci
+      - name: Install other dependencies
+        if: matrix.service != 'frontend'
+        run: npm install
       - name: Test backend and Telegram bot
         if: matrix.service != 'frontend'
         run: npm test
@@ -27,7 +32,10 @@ jobs:
         run: npm run build
       - name: Test frontend dashboard
         if: matrix.service == 'frontend'
-        run: node --test tests/*.test.cjs
+        run: npm test
+      - name: Audit frontend dependencies
+        if: matrix.service == 'frontend'
+        run: npm audit --audit-level=moderate
 
   integration:
     runs-on: ubuntu-latest
