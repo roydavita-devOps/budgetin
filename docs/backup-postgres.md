@@ -2,7 +2,9 @@
 
 ## Status dan batas
 
-Pada 24 November 2026, uji menggunakan data sintetis berhasil: dump dibuat, dipulihkan ke database baru pada container terisolasi, dan isi contoh diperiksa sebagai hasil boolean. Pengulangan terakhir berlangsung sekitar 13 detik termasuk pembuatan resource dan backup; ini **bukan RTO produksi**. Uji juga memeriksa penolakan arsip yang terpotong dan tujuan di dalam repositori, serta bahwa dump yang gagal tidak meninggalkan file parsial. `scripts/backup-test-restore.ps1` dapat mengulangi uji. Tidak ada backup atau data produksi yang dibuat, dibaca, atau dipulihkan dalam uji tersebut. Keberadaan dan kualitas backup di luar repositori belum diketahui.
+Pada 24 November 2026, uji menggunakan data sintetis berhasil: dump dibuat, dipulihkan ke database baru pada container terisolasi, dan isi contoh diperiksa sebagai hasil boolean. Uji juga memeriksa penolakan arsip yang terpotong dan tujuan di dalam repositori, serta bahwa dump yang gagal tidak meninggalkan file parsial. `scripts/backup-test-restore.ps1` dapat mengulangi uji.
+
+Pada hari yang sama, backup database produksi dibuat di luar repositori dan dipulihkan ke PostgreSQL sementara tanpa jaringan. Pemeriksaan skema dasar berhasil tanpa menampilkan isi pengguna; ini bukan verifikasi seluruh fungsi aplikasi atau RTO produksi. Pemilik memilih lokasi yang enkripsinya belum terverifikasi dan izinnya masih luas. Arsip tidak dienkripsi oleh skrip; amankan penyimpanan dan batasi aksesnya.
 
 Pemilik produk dan operator harus menyepakati frekuensi, retensi, RPO, RTO, penanggung jawab, dan jadwal latihan restore. Belum ada kebijakan yang disetujui atau otomatisasi retensi. Buat monitoring keberhasilan, umur backup terakhir, kapasitas, dan kegagalan restore; jangan menganggap keberadaan file sebagai bukti dapat dipulihkan.
 
@@ -27,6 +29,8 @@ pwsh -NoProfile -File scripts/backup-postgres.ps1 `
 ```
 
 Skrip menulis file `.partial` dengan nama acak, menjalankan `pg_dump` format custom, lalu membaca seluruh arsip dengan `pg_restore` tanpa menghubungi database sebelum mempublikasikannya sebagai `.dump`. SHA-256 ditampilkan untuk dicatat secara aman dan dibandingkan setelah pemindahan. Hash yang disimpan bersama arsip tanpa perlindungan terpisah tidak membuktikan keaslian. Validasi decode bukan pengganti restore; ia tidak membuktikan isi lengkap secara semantik. Kegagalan biasa menghapus file parsial, tetapi penghentian paksa atau gangguan host dapat meninggalkannya: operator harus menangani sisa file secara aman sesuai kebijakan.
+
+Jika pemilik produk secara sadar memilih lokasi yang tidak terverifikasi enkripsinya, operator dapat mengganti `-ConfirmSecureStorage` dengan `-AcknowledgeUnencryptedStorage`. Arsip tidak dienkripsi oleh skrip dan mengikuti izin folder; salinannya dapat dibaca oleh pihak yang memiliki akses ke folder tersebut. Keputusan ini tidak memenuhi rekomendasi penyimpanan terenkripsi dan perlu ditinjau kembali untuk data pengguna.
 
 Skrip menolak path dalam repositori ini, direktori di bawah penanda `.git`, dan path dengan symbolic link/junction. Pemeriksaan ini bukan bukti bahwa penyimpanan aman atau tidak terhubung ke Git melalui mount, konfigurasi Git khusus, atau mekanisme sinkronisasi. Operator wajib memastikan file tidak pernah masuk Git, termasuk backup lama dan salinannya. Jangan tambahkan aturan ignore sebagai pengganti penyimpanan privat.
 

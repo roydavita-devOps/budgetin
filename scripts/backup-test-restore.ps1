@@ -33,10 +33,11 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) { throw 'Synthetic PostgreSQL did not become ready.' }
-    Run-Docker @('exec', $container, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'synthetic', '-d', 'synthetic', '-c', "CREATE TABLE backup_probe (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO backup_probe VALUES (1, 'synthetic-alpha'), (2, 'synthetic-beta');")
+    Run-Docker @('exec', $container, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'synthetic', '-d', 'synthetic', '-c', "CREATE TABLE users (id integer); CREATE TABLE transactions (id integer); CREATE TABLE telegram_accounts (id integer); CREATE TABLE backup_probe (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO backup_probe VALUES (1, 'synthetic-alpha'), (2, 'synthetic-beta');")
     & (Join-Path $PSScriptRoot 'backup-postgres.ps1') -Container $container -Database 'synthetic' -User 'synthetic' -Destination $directory -ConfirmSecureStorage | Out-Null
     $archives = @(Get-ChildItem -LiteralPath $directory -Filter '*.dump' -File)
     if ($archives.Count -ne 1) { throw 'Expected exactly one synthetic archive.' }
+    & (Join-Path $PSScriptRoot 'backup-verify-restore.ps1') -Archive $archives[0].FullName -ExpectedSha256 (Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash | Out-Null
     Run-Docker @('cp', $archives[0].FullName, "${container}:/tmp/synthetic.dump")
     Run-Docker @('exec', $container, 'createdb', '-U', 'synthetic', 'restored')
     Run-Docker @('exec', $container, 'pg_restore', '--exit-on-error', '--no-owner', '--no-privileges', '-U', 'synthetic', '-d', 'restored', '/tmp/synthetic.dump')

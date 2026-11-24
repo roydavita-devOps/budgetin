@@ -5,11 +5,17 @@ param(
     [Parameter(Mandatory)][string]$Database,
     [Parameter(Mandatory)][string]$User,
     [Parameter(Mandatory)][string]$Destination,
-    [Parameter(Mandatory)][switch]$ConfirmSecureStorage
+    [switch]$ConfirmSecureStorage,
+    [switch]$AcknowledgeUnencryptedStorage
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $ConfirmSecureStorage) { throw 'ConfirmSecureStorage is required.' }
+if ($ConfirmSecureStorage -eq $AcknowledgeUnencryptedStorage) {
+    throw 'Choose either ConfirmSecureStorage or AcknowledgeUnencryptedStorage.'
+}
+if ($AcknowledgeUnencryptedStorage) {
+    Write-Warning 'The archive is not encrypted by this script and follows the destination folder permissions.'
+}
 if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
     throw 'Destination must be an existing, private directory outside the repository.'
 }
@@ -61,7 +67,7 @@ function Invoke-DockerStream {
             $stream = [IO.File]::OpenRead($InputPath)
             $stream.CopyTo($process.StandardInput.BaseStream)
             $process.StandardInput.Close()
-            $discard.GetAwaiter().GetResult()
+            [void]$discard.GetAwaiter().GetResult()
         } else {
             $stream = [IO.File]::Open($OutputPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
             $process.StandardOutput.BaseStream.CopyTo($stream)
