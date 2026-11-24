@@ -13,6 +13,8 @@ Dokumen perencanaan dan produk sudah dipisah ke folder `docs/`:
 - [docs/commercialization.md](x:/PROJECT%20MANDIRI/budgetin/docs/commercialization.md)
 - [Tim dan alur kerja pengembangan](docs/tim-dan-alur-kerja.md)
 - [Masukan tim untuk pengembangan Budgetin](docs/masukan-tim-pengembangan.md)
+- [Backup dan pemulihan PostgreSQL](docs/backup-postgres.md)
+- [Status pekerjaan prioritas](docs/status-prioritas.md)
 
 ## Run Locally
 
@@ -35,6 +37,7 @@ Services:
 Ringkasan key penting:
 
 - `JWT_SECRET`: secret JWT backend
+- `NODE_ENV`: gunakan `production` untuk production; `.env.example` memakai `development` untuk lokal
 - `ADMIN_PHONE_NUMBER`: nomor admin utama untuk flow verifikasi dan moderation
 - `REFRESH_TOKEN_TTL_DAYS`: masa berlaku refresh token dalam hari
 - `REFRESH_COOKIE_NAME`: nama cookie refresh token
@@ -45,15 +48,21 @@ Ringkasan key penting:
 - `WEB_APP_URL`: URL dashboard yang dikirim Telegram bot ke user
 - `TELEGRAM_BOT_TOKEN`: token bot Telegram
 - `BOT_INTERNAL_TOKEN`: token internal backend <-> telegram bot
+- `OTP_TRUST_PROXY_HOPS`: opsional; aktifkan hanya setelah jumlah proxy tepercaya dan akses jaringan diverifikasi
 - `CLOUDFLARE_TUNNEL_TOKEN`: token Cloudflare Tunnel
 
 Untuk production Budgetin yang sudah live di HTTPS, gunakan:
 
 ```env
+NODE_ENV=production
 COOKIE_SECURE=true
 WEB_APP_URL=https://budgetin.seni.my.id/
 CORS_ORIGIN=http://localhost:3000,https://budgetin.seni.my.id
 ```
+
+Di production, `JWT_SECRET` dan `BOT_INTERNAL_TOKEN` harus berbeda, acak, dan masing-masing minimal 32 byte. `DATABASE_URL` juga harus memakai password database non-default minimal 24 byte. Backend akan menolak konfigurasi yang tidak memenuhi syarat ini. Mengubah password database yang sudah ada memerlukan perubahan role PostgreSQL dan konfigurasi yang terkoordinasi; mengubah `.env` saja tidak mengubah password role. Rotasi `JWT_SECRET` membatalkan access token lama; refresh token yang masih valid tidak otomatis dicabut. Backend, PostgreSQL, dan Redis dipublikasikan hanya ke `127.0.0.1` pada host; container tetap berkomunikasi melalui jaringan Docker.
+
+Permintaan dan verifikasi OTP dibatasi per nomor melalui Redis. Jika Redis tidak tersedia, OTP sementara tidak dapat diproses. Pembatasan berdasarkan alamat sumber tidak diaktifkan secara default agar pengguna yang berada di belakang proxy yang sama tidak terkunci bersama.
 
 ## Telegram Bot
 

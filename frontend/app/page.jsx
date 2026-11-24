@@ -89,7 +89,7 @@ function formatDateWib(value) {
 function monthLabel(value) {
   const [year, month] = String(value || '').split('-');
   if (!year || !month) return 'Bulan ini';
-  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString('id-ID', {
+  return new Date(Date.UTC(Number(year), Number(month) - 1, 1, 12)).toLocaleDateString('id-ID', {
     month: 'long',
     year: 'numeric',
     timeZone: 'Asia/Jakarta',
@@ -113,6 +113,25 @@ function summarizeTransactions(transactions) {
     },
     { income: 0, expense: 0, count: 0 },
   );
+}
+
+function filterHistory(transactions, filters) {
+  return transactions.filter((item) => {
+    if (filters.type && item.type !== filters.type) return false;
+    if (filters.category && item.category !== filters.category) return false;
+    if (filters.subcategory === '__default__' && item.subcategory) return false;
+    if (filters.subcategory && filters.subcategory !== '__default__' && item.subcategory !== filters.subcategory) return false;
+    if (filters.search) {
+      const haystack = `${item.category_label || item.category} ${item.subcategory || ''} ${item.note || ''}`.toLowerCase();
+      if (!haystack.includes(filters.search.toLowerCase())) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    if (filters.sort === 'amount_desc') return Number(b.amount) - Number(a.amount);
+    if (filters.sort === 'amount_asc') return Number(a.amount) - Number(b.amount);
+    const order = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    return filters.sort === 'oldest' ? order : -order;
+  });
 }
 
 function groupByCategory(transactions, type) {
@@ -172,14 +191,38 @@ function buildTrend(transactions, period) {
       ? dateKey(date)
       : period === 'weekly'
         ? weekKey(date)
-        : date.toLocaleDateString('id-ID', { month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' });
+        : `${jakartaDateParts(date).year}-${jakartaDateParts(date).month}`;
 
-    const current = grouped.get(key) || { label: key, income: 0, expense: 0 };
-    current[item.type] += Number(item.amount || 0);
+    const label = period === 'monthly'
+      ? date.toLocaleDateString('id-ID', { month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' })
+      : key;
+    const current = grouped.get(key) || { label, income: 0, expense: 0 };
+    if (item.type === 'income' || item.type === 'expense') current[item.type] += Number(item.amount || 0);
     grouped.set(key, current);
   });
 
-  return [...grouped.values()].sort((a, b) => a.label.localeCompare(b.label, 'id-ID'));
+  return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+}
+
+async function fetchAllTransactions(requestPage, month, signal) {
+  const transactions = [];
+  const ids = new Set();
+  const limit = 500;
+
+  for (let offset = 0; ; offset += limit) {
+    if (signal.aborted) throw new DOMException('Dibatalkan', 'AbortError');
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset), sort: 'oldest' });
+    if (month) params.set('month', month);
+    const body = await requestPage(`/transactions?${params.toString()}`, signal);
+    if (signal.aborted) throw new DOMException('Dibatalkan', 'AbortError');
+    if (!Array.isArray(body.data) || body.data.length > limit) throw new Error('Respons transaksi tidak valid.');
+    for (const item of body.data) {
+      if (item.id == null || ids.has(item.id)) throw new Error('Halaman transaksi tidak konsisten. Silakan coba lagi.');
+      ids.add(item.id);
+      transactions.push(item);
+    }
+    if (body.data.length < limit) return transactions;
+  }
 }
 
 function categoryInsight(expenses) {
@@ -211,6 +254,8 @@ export default function Home() {
   const [token, setToken] = useState('');
   const [transactions, setTransactions] = useState([]);
   const [monthlyTrendTransactions, setMonthlyTrendTransactions] = useState([]);
+  const [dataVersion, setDataVersion] = useState(0);
+  const [dataStatus, setDataStatus] = useState({ key: '', error: '' });
   const [period, setPeriod] = useState('weekly');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthValue());
   const [filters, setFilters] = useState({ type: '', category: '', subcategory: '', sort: 'newest', search: '' });
@@ -239,21 +284,12 @@ export default function Home() {
   const isDeleted = Boolean(token && user?.is_deleted);
   const isPendingVerification = Boolean(token && user && !user.is_verified && !user.is_blocked && !user.is_deleted);
   const isBlocked = Boolean(token && user?.is_blocked && !user.is_deleted);
-  const canViewDashboard = Boolean(token && !(isBlocked || isDeleted || isPendingVerification));
+  const canViewDashboard = Boolean(token && user?.is_verified && !(isBlocked || isDeleted || isPendingVerification));
+  const dataKey = JSON.stringify([token, user?.id, selectedMonth, dataVersion]);
+  const dataReady = dataStatus.key === dataKey && !dataStatus.error;
+  const dataError = dataStatus.key === dataKey ? dataStatus.error : '';
 
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((item) => {
-      if (filters.type && item.type !== filters.type) return false;
-      if (filters.category && item.category !== filters.category) return false;
-      if (filters.subcategory === '__default__' && item.subcategory) return false;
-      if (filters.subcategory && filters.subcategory !== '__default__' && item.subcategory !== filters.subcategory) return false;
-      if (filters.search) {
-        const haystack = `${item.category_label || item.category} ${item.subcategory || ''} ${item.note || ''}`.toLowerCase();
-        if (!haystack.includes(filters.search.toLowerCase())) return false;
-      }
-      return true;
-    });
-  }, [transactions, filters.type, filters.category, filters.subcategory, filters.search]);
+  const filteredTransactions = useMemo(() => filterHistory(transactions, filters), [transactions, filters]);
 
   const periodTotals = useMemo(() => summarizeTransactions(transactions), [transactions]);
   const filteredTotals = useMemo(() => summarizeTransactions(filteredTransactions), [filteredTransactions]);
@@ -427,40 +463,6 @@ export default function Home() {
     }
   }
 
-  async function loadData() {
-    if (!token) return;
-    if (!user?.is_verified || user?.is_blocked || user?.is_deleted) {
-      setTransactions([]);
-      return;
-    }
-
-    const params = new URLSearchParams({
-      limit: '500',
-      sort: filters.sort,
-      month: selectedMonth,
-    });
-    if (filters.search.trim()) params.set('search', filters.search.trim());
-
-    const transactionBody = await request(`/transactions?${params.toString()}`, { headers });
-    setTransactions(transactionBody.data);
-  }
-
-  async function loadMonthlyTrendData() {
-    if (!token) return;
-    if (!user?.is_verified || user?.is_blocked || user?.is_deleted) {
-      setMonthlyTrendTransactions([]);
-      return;
-    }
-
-    const params = new URLSearchParams({
-      limit: '500',
-      sort: 'oldest',
-    });
-
-    const transactionBody = await request(`/transactions?${params.toString()}`, { headers });
-    setMonthlyTrendTransactions(transactionBody.data);
-  }
-
   async function loadCategories() {
     if (!token || !user?.is_verified || user?.is_blocked || user?.is_deleted) {
       setCustomCategories([]);
@@ -502,6 +504,7 @@ export default function Home() {
     });
     setTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
     setMonthlyTrendTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
+    setDataVersion((current) => current + 1);
     cancelEditTransaction();
   }
 
@@ -516,6 +519,7 @@ export default function Home() {
     });
     setTransactions((current) => current.filter((item) => item.id !== itemId));
     setMonthlyTrendTransactions((current) => current.filter((item) => item.id !== itemId));
+    setDataVersion((current) => current + 1);
   }
 
   function toggleBulkSelectMode() {
@@ -588,6 +592,7 @@ export default function Home() {
     setTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
     setMonthlyTrendTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
     if (updatedById.size > 0) {
+      setDataVersion((current) => current + 1);
       setSelectedTransactionIds([]);
       setIsBulkSelectMode(false);
       closeBulkEditModal();
@@ -621,6 +626,7 @@ export default function Home() {
 
     setTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
     setMonthlyTrendTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
+    if (deletedIds.size) setDataVersion((current) => current + 1);
     setSelectedTransactionIds([]);
     setIsBulkSelectMode(false);
     if (failedCount > 0) {
@@ -768,12 +774,28 @@ export default function Home() {
   }, [token]);
 
   useEffect(() => {
-    loadData().catch(console.error);
-  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, filters.sort, filters.search]);
+    if (!canViewDashboard) {
+      setDataStatus({ key: '', error: '' });
+      return;
+    }
+    const controller = new AbortController();
+    const requestPage = (path, signal) => request(path, { headers, signal });
 
-  useEffect(() => {
-    loadMonthlyTrendData().catch(console.error);
-  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
+    Promise.all([
+      fetchAllTransactions(requestPage, selectedMonth, controller.signal),
+      fetchAllTransactions(requestPage, '', controller.signal),
+    ]).then(([monthTransactions, allTransactions]) => {
+      if (controller.signal.aborted) return;
+      setTransactions(monthTransactions);
+      setMonthlyTrendTransactions(allTransactions);
+      setDataStatus({ key: dataKey, error: '' });
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      setDataStatus({ key: dataKey, error: error.message || 'Gagal memuat transaksi.' });
+    });
+    return () => controller.abort();
+  }, [token, user?.id, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, dataVersion]);
 
   useEffect(() => {
     loadCategories().catch(console.error);
@@ -784,6 +806,15 @@ export default function Home() {
     const visibleIds = new Set(filteredTransactions.map((item) => item.id));
     setSelectedTransactionIds((current) => current.filter((id) => visibleIds.has(id)));
   }, [isBulkSelectMode, filteredTransactions]);
+
+  useEffect(() => {
+    setEditingTransaction(null);
+    setIsBulkSelectMode(false);
+    setSelectedTransactionIds([]);
+    setIsBulkEditModalOpen(false);
+    setIsSubcategoryDrawerOpen(false);
+    setIsSubcategoryTransactionsModalOpen(false);
+  }, [selectedMonth]);
 
   useEffect(() => {
     if (!isSubcategoryDrawerOpen) return;
@@ -915,7 +946,7 @@ export default function Home() {
             <div className="mt-8 rounded-2xl bg-[var(--surface-soft)] p-4">
               <p className="muted-text text-xs font-medium uppercase tracking-[0.08em]">Periode aktif</p>
               <p className="heading-text mt-2 text-base font-semibold">{monthLabel(selectedMonth)}</p>
-              <p className="muted-text mt-1 text-sm">{formatNumber(periodTotals.count)} transaksi tercatat</p>
+              {dataReady ? <p className="muted-text mt-1 text-sm">{formatNumber(periodTotals.count)} transaksi tercatat</p> : null}
             </div>
 
             <div className="mt-auto space-y-3 pt-8">
@@ -942,7 +973,7 @@ export default function Home() {
                 <p className="muted-text max-w-2xl text-sm leading-6">
                   {canViewDashboard
                     ? currentSection.caption
-                    : 'Gunakan nomor Telegram yang sudah terhubung untuk melihat seluruh catatan dan statistik kamu.'}
+                    : 'Gunakan nomor yang terhubung ke Telegram. Jika kode kedaluwarsa, minta OTP lagi. Jangan bagikan kode.'}
                 </p>
               </div>
 
@@ -956,7 +987,7 @@ export default function Home() {
                 </button>
                 {canViewDashboard ? (
                   <>
-                    <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} />
+                    <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={selectedMonth} onChange={(event) => { if (event.target.value) setSelectedMonth(event.target.value); }} />
                     <button className="danger-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md lg:hidden" onClick={logout}>Logout</button>
                   </>
                 ) : null}
@@ -999,7 +1030,7 @@ export default function Home() {
             </section>
           )}
 
-          {isBlocked && <StatusPanel title="Akun diblokir" tone="danger">Akun kamu belum bisa menggunakan dashboard Budgetin. Hubungi admin jika menurutmu ini keliru.</StatusPanel>}
+          {isBlocked && <StatusPanel title="Akun diblokir" tone="danger">Akun kamu belum bisa menggunakan dashboard Budgetin. Buka bot Telegram Budgetin dan ketik /tentang untuk melihat kontak admin.</StatusPanel>}
 
           {isDeleted && (
             <StatusPanel title="Akun dinonaktifkan" tone="danger">
@@ -1014,7 +1045,19 @@ export default function Home() {
             </StatusPanel>
           )}
 
-          {canViewDashboard && activeSection === 'dashboard' ? (
+          {canViewDashboard && !dataReady && activeSection !== 'export' ? (
+            <section className="surface-card rounded-xl p-6" role={dataError ? 'alert' : 'status'}>
+              <p className="heading-text font-semibold">{dataError ? 'Transaksi gagal dimuat' : 'Memuat transaksi...'}</p>
+              {dataError ? (
+                <>
+                  <p className="muted-text mt-2 text-sm">{dataError}</p>
+                  <button className="soft-button mt-3 rounded-xl px-3 py-2 text-sm font-semibold" onClick={() => setDataVersion((current) => current + 1)}>Coba lagi</button>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          {canViewDashboard && dataReady && activeSection === 'dashboard' ? (
             <>
               <section className="surface-card rounded-[28px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -1022,7 +1065,7 @@ export default function Home() {
                     <p className="brand-text text-xs font-medium uppercase tracking-[0.08em]">Ringkasan periode aktif</p>
                     <h2 className="heading-text mt-3 text-4xl font-bold tracking-tight">{formatCurrency(balance)}</h2>
                     <p className="muted-text mt-2 text-sm leading-6">
-                      {balance >= 0 ? 'Saldo masih aman pada periode ini.' : 'Pengeluaran periode ini masih lebih tinggi dari pemasukan.'}
+                      Selisih pemasukan dan pengeluaran pada periode ini.
                     </p>
                   </div>
                   <div className="surface-soft rounded-full px-4 py-2 text-sm font-semibold brand-text">
@@ -1063,7 +1106,7 @@ export default function Home() {
             </>
           ) : null}
 
-          {canViewDashboard && activeSection === 'kategori' ? (
+          {canViewDashboard && dataReady && activeSection === 'kategori' ? (
             <section className="grid gap-5 sm:gap-6">
               <div className="surface-card flex flex-col gap-4 rounded-[24px] p-5 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:flex-row sm:items-center sm:justify-between sm:p-6">
                 <div className="space-y-1">
@@ -1079,7 +1122,7 @@ export default function Home() {
             </section>
           ) : null}
 
-          {canViewDashboard && activeSection === 'riwayat' ? (
+          {canViewDashboard && dataReady && activeSection === 'riwayat' ? (
             <section className="surface-card rounded-[24px] transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md">
               <div className="p-6 sm:p-8">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -1245,7 +1288,7 @@ export default function Home() {
         </div>
       </div>
 
-      {canViewDashboard && editingTransaction ? (
+      {canViewDashboard && dataReady && editingTransaction ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
           <div className="surface-card max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1282,7 +1325,7 @@ export default function Home() {
         </div>
       ) : null}
 
-      {canViewDashboard && isBulkEditModalOpen ? (
+      {canViewDashboard && dataReady && isBulkEditModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
           <div className="surface-card w-full max-w-2xl rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1339,7 +1382,7 @@ export default function Home() {
         </div>
       ) : null}
 
-      {canViewDashboard && isSubcategoryDrawerOpen ? (
+      {canViewDashboard && dataReady && isSubcategoryDrawerOpen ? (
         <div className="fixed inset-0 z-40 bg-black/35" onClick={closeSubcategoryDrawer}>
           <div className="absolute inset-y-0 right-0 w-full max-w-xl p-3 sm:p-4" onClick={(event) => event.stopPropagation()}>
             <div className="surface-card flex h-full flex-col rounded-[28px] p-5 shadow-[var(--shadow-md)] sm:p-6">
@@ -1427,7 +1470,7 @@ export default function Home() {
         </div>
       ) : null}
 
-      {canViewDashboard && isSubcategoryTransactionsModalOpen && selectedSubcategoryItem ? (
+      {canViewDashboard && dataReady && isSubcategoryTransactionsModalOpen && selectedSubcategoryItem ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6">
           <div className="surface-card flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-[24px] p-6 shadow-[var(--shadow-md)] sm:p-8">
             <div className="flex flex-col gap-3 border-b border-[var(--border)] pb-5 sm:flex-row sm:items-start sm:justify-between">

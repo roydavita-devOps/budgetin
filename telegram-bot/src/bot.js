@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
@@ -27,14 +29,16 @@ let offset = 0;
 const lastTransactionsByChat = new Map();
 const pendingDeleteTransactionsByChat = new Map();
 
-if (!token) {
-  console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
-  setInterval(() => {}, 60_000);
-} else {
-  poll().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (!token) {
+    console.log('TELEGRAM_BOT_TOKEN is empty. Bot service is running idle.');
+    setInterval(() => {}, 60_000);
+  } else {
+    poll().catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+  }
 }
 
 async function poll() {
@@ -45,8 +49,7 @@ async function poll() {
       const updates = await telegram('getUpdates', { timeout: pollingTimeoutSeconds, offset });
       for (const update of updates.result || []) {
         offset = update.update_id + 1;
-        if (update.message?.contact) await handleContact(update.message);
-        if (update.message?.text) await handleMessage(update.message);
+        await handleUpdate(update);
       }
     } catch (error) {
       const detail = error.cause?.message ? ` (${error.cause.message})` : '';
@@ -54,6 +57,22 @@ async function poll() {
       await wait(3000);
     }
   }
+}
+
+function isPrivateChatId(chatId) {
+  // Telegram group and channel chat IDs are negative; legacy destinations lack chat type.
+  return (typeof chatId === 'number' || typeof chatId === 'string')
+    && /^[1-9]\d*$/.test(String(chatId))
+    && Number.isSafeInteger(Number(chatId));
+}
+
+export async function handleUpdate(update) {
+  const message = update?.message;
+  if (message?.chat?.type !== 'private' || !isPrivateChatId(message.chat.id)
+    || !Number.isSafeInteger(message.from?.id) || message.chat.id !== message.from.id) return;
+
+  if (message.contact) await handleContact(message);
+  if (message.text) await handleMessage(message);
 }
 
 async function setupBotCommands() {
@@ -278,6 +297,7 @@ async function ensureRegistered(message) {
           'Akun kamu diblokir.',
           '',
           'Hubungi admin Budgetin jika menurutmu ini keliru.',
+          'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
         ].join('\n'),
       );
       return null;
@@ -320,6 +340,7 @@ async function sendStartMessage(message) {
             'Akun kamu diblokir.',
             '',
             'Hubungi admin Budgetin jika menurutmu ini keliru.',
+            'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
           ].join('\n'),
           { reply_markup: { remove_keyboard: true } },
         );
@@ -368,6 +389,7 @@ function sendDeletedAccountMessage(chatId, account, extra = {}) {
       '',
       recoveryText,
       'Selama status ini aktif, Telegram dan dashboard web tidak bisa dipakai.',
+      'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
     ].join('\n'),
     extra,
   );
@@ -674,7 +696,7 @@ async function handleContact(message) {
   const contact = message.contact;
   const chatId = message.chat.id;
 
-  if (contact.user_id && contact.user_id !== message.from.id) {
+  if (!Number.isSafeInteger(contact.user_id) || contact.user_id !== message.from.id) {
     return sendMessage(chatId, 'Kirim nomor Telegram milik kamu sendiri untuk menghubungkan akun.');
   }
 
@@ -711,6 +733,7 @@ async function handleContact(message) {
         'Nomor Telegram sudah terhubung.',
         `Kode OTP Budgetin kamu: ${body.otp}`,
         'Kode berlaku 10 menit. Masukkan kode ini di halaman login web.',
+        'Jangan bagikan kode OTP kepada siapa pun.',
         '',
         'Kamu bisa mulai catat transaksi dari Telegram:',
         '/makan nasi padang 18000',
@@ -1289,6 +1312,7 @@ async function decideUserVerification(message, text, action) {
           'Akun Budgetin kamu diblokir admin.',
           '',
           'Hubungi admin Budgetin jika menurutmu ini keliru.',
+          'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
         ].join('\n'),
       ).catch(() => null);
     }
@@ -1930,8 +1954,9 @@ async function telegram(method, payload) {
   return body;
 }
 
-async function sendMessage(chatId, text, extra = {}) {
-  return telegram('sendMessage', { chat_id: chatId, text, ...extra });
+export async function sendMessage(chatId, text, extra = {}) {
+  if (!isPrivateChatId(chatId)) throw new Error('Pesan hanya dapat dikirim ke chat pribadi.');
+  return telegram('sendMessage', { ...extra, chat_id: chatId, text });
 }
 
 function wait(ms) {

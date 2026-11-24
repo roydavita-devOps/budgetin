@@ -5,10 +5,46 @@ import crypto from 'crypto';
 import express from 'express';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { createClient } from 'redis';
 import { query } from './db.js';
 
+export function validateRuntimeConfig(env) {
+  const production = env.NODE_ENV === 'production' || String(env.COOKIE_SECURE || '').toLowerCase() === 'true';
+  if (production) {
+    const defaults = new Set(['development_secret', 'budgetin_internal_dev_token', 'change_me_in_production', 'change_me_internal_bot_token']);
+    for (const name of ['JWT_SECRET', 'BOT_INTERNAL_TOKEN']) {
+      const value = env[name] || '';
+      if (Buffer.byteLength(value.trim(), 'utf8') < 32 || defaults.has(value.trim().toLowerCase()) || /^change[_-]?me/i.test(value.trim())) {
+        throw new Error(`${name} must be a non-default secret of at least 32 bytes in production`);
+      }
+    }
+    if (env.JWT_SECRET === env.BOT_INTERNAL_TOKEN) {
+      throw new Error('JWT_SECRET and BOT_INTERNAL_TOKEN must be different in production');
+    }
+    let databasePassword;
+    try {
+      const databaseUrl = new URL(env.DATABASE_URL || '');
+      if (!['postgres:', 'postgresql:'].includes(databaseUrl.protocol)) throw new Error('invalid protocol');
+      databasePassword = decodeURIComponent(databaseUrl.password);
+    } catch {
+      throw new Error('DATABASE_URL must be configured for production');
+    }
+    if (Buffer.byteLength(databasePassword, 'utf8') < 24 || databasePassword === 'budgetin_password') {
+      throw new Error('DATABASE_URL must use a non-default database password of at least 24 bytes in production');
+    }
+  }
+  const hops = String(env.OTP_TRUST_PROXY_HOPS || '').trim();
+  if (hops && (!/^[1-9]\d*$/.test(hops) || !Number.isSafeInteger(Number(hops)))) {
+    throw new Error('OTP_TRUST_PROXY_HOPS must be a positive integer when configured');
+  }
+  return { production, proxyHops: hops ? Number(hops) : 0 };
+}
+
+const runtimeConfig = validateRuntimeConfig(process.env);
 const app = express();
+if (runtimeConfig.proxyHops) app.set('trust proxy', runtimeConfig.proxyHops);
 const port = Number(process.env.PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || 'development_secret';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
@@ -53,7 +89,57 @@ app.use(express.json());
 
 const redis = createClient({ url: process.env.REDIS_URL });
 redis.on('error', (error) => console.error('Redis error:', error.message));
-redis.connect().catch((error) => console.error('Redis connect failed:', error.message));
+const otpRedis = redis.duplicate({ disableOfflineQueue: true });
+otpRedis.on('error', (error) => console.error('OTP rate limit Redis error:', error.message));
+
+const otpRateLimitScript = `
+  local result = {}
+  for i, key in ipairs(KEYS) do
+    local count = redis.call('INCR', key)
+    if count == 1 or redis.call('TTL', key) < 0 then
+      redis.call('EXPIRE', key, ARGV[1])
+    end
+    result[#result + 1] = count
+    result[#result + 1] = redis.call('TTL', key)
+  end
+  return result
+`;
+
+export function createOtpRateLimit({ client, secret, sourceEnabled = false }) {
+  const windowSeconds = 600;
+  const digest = (value) => crypto.createHmac('sha256', secret).update(value).digest('hex');
+  return (action) => async (req, res, next) => {
+    const phone = normalizePhone(req.body?.phone_number);
+    const code = String(req.body?.code || '').trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone) || (action === 'verify' && !/^\d{6}$/.test(code))) {
+      return res.status(400).json({ error: action === 'verify' ? 'phone_number and 6 digit code are required' : 'phone_number is required' });
+    }
+
+    const keys = [`otp-limit:${action}:account:${digest(phone)}`];
+    const limits = [action === 'request' ? 5 : 10];
+    if (sourceEnabled && req.ip) {
+      keys.push(`otp-limit:${action}:source:${digest(req.ip)}`);
+      limits.push(action === 'request' ? 60 : 120);
+    }
+    try {
+      if (!client.isReady) throw new Error('Redis unavailable');
+      const counts = await client.eval(otpRateLimitScript, { keys, arguments: [String(windowSeconds)] });
+      if (!Array.isArray(counts) || counts.length !== keys.length * 2 || counts.some((value) => !Number.isInteger(value) || value < 0)) {
+        throw new Error('Invalid Redis rate limit response');
+      }
+      const retryAfter = limits.reduce((max, limit, index) => counts[index * 2] > limit ? Math.max(max, counts[index * 2 + 1], 1) : max, 0);
+      if (retryAfter) {
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({ error: 'Terlalu banyak percobaan. Coba lagi nanti.' });
+      }
+      return next();
+    } catch {
+      return res.status(503).json({ error: 'Layanan OTP sementara tidak tersedia. Coba lagi nanti.' });
+    }
+  };
+}
+
+const otpRateLimit = createOtpRateLimit({ client: otpRedis, secret: jwtSecret, sourceEnabled: Boolean(runtimeConfig.proxyHops) });
 
 function signToken(user) {
   return jwt.sign(
@@ -210,6 +296,12 @@ function normalizePhone(phoneNumber) {
   return cleaned ? `+${cleaned}` : '';
 }
 
+function isPrivateTelegramChat(userId, chatId) {
+  const user = String(userId || '').trim();
+  const chat = String(chatId || '').trim();
+  return /^[1-9]\d*$/.test(user) && user === chat;
+}
+
 function generateOtp() {
   return crypto.randomInt(100000, 1000000).toString();
 }
@@ -226,7 +318,7 @@ async function createOtp(phoneNumber, purpose = 'login') {
 }
 
 async function sendTelegramOtp(chatId, code) {
-  return sendTelegramMessage(chatId, `Kode OTP Budgetin kamu: ${code}\nKode berlaku 10 menit.`);
+  return sendTelegramMessage(chatId, `Kode OTP Budgetin kamu: ${code}\nKode berlaku 10 menit. Jangan bagikan kode ini kepada siapa pun.`);
 }
 
 async function sendTelegramMessage(chatId, text) {
@@ -757,14 +849,14 @@ function buildTransactionFilters(userId, queryParams) {
 function transactionOrder(sort) {
   switch (sort) {
     case 'oldest':
-      return 'created_at ASC';
+      return 'created_at ASC, id ASC';
     case 'amount_desc':
-      return 'amount DESC, created_at DESC';
+      return 'amount DESC, created_at DESC, id DESC';
     case 'amount_asc':
-      return 'amount ASC, created_at DESC';
+      return 'amount ASC, created_at DESC, id DESC';
     case 'newest':
     default:
-      return 'created_at DESC';
+      return 'created_at DESC, id DESC';
   }
 }
 
@@ -792,7 +884,9 @@ async function getSummaryForUser(userId, queryParams = {}) {
     ? normalizeInput(queryParams.month)
     : '';
   const cacheKey = `summary:${userId}:${normalizedMonth || 'all'}`;
-  const cached = await redis.get(cacheKey).catch(() => null);
+  const cacheable = !['type', 'category', 'search', 'date', 'date_from', 'date_to']
+    .some((key) => normalizeInput(queryParams[key]));
+  const cached = cacheable ? await redis.get(cacheKey).catch(() => null) : null;
   if (cached) return JSON.parse(cached).data;
 
   const { where, params } = buildTransactionFilters(userId, queryParams);
@@ -823,7 +917,7 @@ async function getSummaryForUser(userId, queryParams = {}) {
     byCategory: withCategoryLabels(byCategory.rows),
   };
 
-  await redis.set(cacheKey, JSON.stringify({ data: summary }), { EX: 30 }).catch(() => {});
+  if (cacheable) await redis.set(cacheKey, JSON.stringify({ data: summary }), { EX: 30 }).catch(() => {});
   return summary;
 }
 
@@ -954,27 +1048,26 @@ app.post('/auth/login', async (req, res) => {
   );
 });
 
-app.post('/auth/request-otp', async (req, res) => {
+app.post('/auth/request-otp', otpRateLimit('request'), async (req, res) => {
   const phoneNumber = normalizePhone(req.body.phone_number);
   if (!phoneNumber || phoneNumber.length < 8) {
     return res.status(400).json({ error: 'phone_number is required' });
   }
 
   const account = await findTelegramAccountByPhone(phoneNumber);
-  if (!account) {
-    return res.status(404).json({
-      error: 'Nomor belum terhubung dengan Telegram. Buka bot Budgetin, tekan /start, lalu share phone number.',
-    });
+  if (account && isPrivateTelegramChat(account.telegram_user_id, account.telegram_chat_id)) {
+    const code = await createOtp(phoneNumber);
+    try {
+      if (!(await sendTelegramOtp(account.telegram_chat_id, code))) console.error('OTP delivery failed');
+    } catch {
+      console.error('OTP delivery failed');
+    }
   }
 
-  const code = await createOtp(phoneNumber);
-  const sent = await sendTelegramOtp(account.telegram_chat_id, code);
-  if (!sent) return res.status(502).json({ error: 'Gagal mengirim OTP ke Telegram' });
-
-  return res.json({ message: 'OTP dikirim ke Telegram', expires_in_seconds: 600 });
+  return res.json({ message: 'Jika nomor sudah terhubung, periksa OTP di chat pribadi bot Budgetin. Jika belum, gunakan /mulai atau /hubungkan_ulang.', expires_in_seconds: 600 });
 });
 
-app.post('/auth/verify-otp', async (req, res) => {
+app.post('/auth/verify-otp', otpRateLimit('verify'), async (req, res) => {
   const phoneNumber = normalizePhone(req.body.phone_number);
   const code = String(req.body.code || '').trim();
 
@@ -998,7 +1091,13 @@ app.post('/auth/verify-otp', async (req, res) => {
     return res.status(401).json({ error: 'OTP tidak valid atau sudah kedaluwarsa' });
   }
 
-  await query('UPDATE otp_codes SET consumed_at = NOW() WHERE id = $1', [otp.id]);
+  const consumed = await query(
+    'UPDATE otp_codes SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL AND expires_at > NOW() RETURNING id',
+    [otp.id],
+  );
+  if (!consumed.rows.length) {
+    return res.status(401).json({ error: 'OTP tidak valid atau sudah kedaluwarsa' });
+  }
 
   const userResult = await query(
     `INSERT INTO users (phone_number)
@@ -1093,6 +1192,9 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
 
   if (!phoneNumber || !telegramUserId || !telegramChatId) {
     return res.status(400).json({ error: 'phone_number, telegram_user_id, and telegram_chat_id are required' });
+  }
+  if (!isPrivateTelegramChat(telegramUserId, telegramChatId)) {
+    return res.status(400).json({ error: 'Gunakan chat pribadi bot Budgetin dan /mulai atau /hubungkan_ulang.' });
   }
 
   const existingTelegramAccount = await findTelegramAccountByTelegramUserId(telegramUserId);
@@ -1951,15 +2053,22 @@ app.delete('/categories/:id', authRequired, webFeatureRequired, async (req, res)
 });
 
 app.get('/transactions', authRequired, webFeatureRequired, async (req, res) => {
-  const limit = Math.min(Number(req.query.limit || 50), 500);
+  const requestedLimit = Number(req.query.limit || 50);
+  const offset = Number(req.query.offset || 0);
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || !Number.isSafeInteger(offset) || offset < 0) {
+    return res.status(400).json({ error: 'limit dan offset harus berupa bilangan bulat yang valid' });
+  }
+  const limit = Math.min(requestedLimit, 500);
   const { where, params } = buildTransactionFilters(req.user.id, req.query);
   params.push(limit);
+  const limitIndex = params.length;
+  params.push(offset);
   const result = await query(
     `SELECT id, type, amount::float AS amount, category, subcategory, note, created_at
      FROM transactions
      WHERE ${where}
      ORDER BY ${transactionOrder(req.query.sort)}
-     LIMIT $${params.length}`,
+     LIMIT $${limitIndex} OFFSET $${params.length}`,
     params,
   );
   res.json({ data: withCategoryLabels(result.rows) });
@@ -2022,7 +2131,13 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'internal server error' });
 });
 
-ensureDatabaseSchema()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  redis.connect().catch((error) => console.error('Redis connect failed:', error.message));
+  otpRedis.connect().catch((error) => console.error('OTP rate limit Redis connect failed:', error.message));
+  if (!runtimeConfig.production) {
+    console.warn('Production secret validation is inactive; set NODE_ENV=production or COOKIE_SECURE=true for production.');
+  }
+  ensureDatabaseSchema()
   .then(() => {
     app.listen(port, () => {
       console.log(`Budgetin API listening on ${port}`);
@@ -2040,3 +2155,4 @@ ensureDatabaseSchema()
     console.error('Failed to prepare database schema:', error);
     process.exit(1);
   });
+}

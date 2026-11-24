@@ -19,5 +19,31 @@ jobs:
         with:
           node-version: 20
       - run: npm install
-      - run: npm test --if-present
-      - run: npm run build --if-present
+      - name: Test backend and Telegram bot
+        if: matrix.service != 'frontend'
+        run: npm test
+      - name: Build frontend
+        if: matrix.service == 'frontend'
+        run: npm run build
+      - name: Test frontend dashboard
+        if: matrix.service == 'frontend'
+        run: node --test tests/*.test.cjs
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+      - name: Prepare isolated test images
+        run: |
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+      - name: Test transactions against temporary PostgreSQL and Redis
+        env:
+          INTEGRATION_REQUIRE_PAGINATION: '1'
+        run: node backend/test/integration-run.mjs

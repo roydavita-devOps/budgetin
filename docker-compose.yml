@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-budgetin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-budgetin_password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d:ro
@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -36,6 +36,7 @@ services:
     build:
       context: ./backend
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://budgetin:budgetin_password@postgres:5432/budgetin}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       JWT_SECRET: ${JWT_SECRET:-change_me_in_production}
@@ -45,10 +46,11 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN:-change_me_internal_bot_token}
+      OTP_TRUST_PROXY_HOPS: ${OTP_TRUST_PROXY_HOPS:-}
       PORT: 4000
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     depends_on:
       postgres:
         condition: service_healthy
