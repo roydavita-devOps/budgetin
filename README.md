@@ -11,6 +11,7 @@ Dokumen perencanaan dan produk sudah dipisah ke folder `docs/`:
 - [docs/categories-and-export.md](x:/PROJECT%20MANDIRI/budgetin/docs/categories-and-export.md)
 - [docs/roadmap.md](x:/PROJECT%20MANDIRI/budgetin/docs/roadmap.md)
 - [docs/commercialization.md](x:/PROJECT%20MANDIRI/budgetin/docs/commercialization.md)
+- [Tim dan alur kerja pengembangan](docs/tim-dan-alur-kerja.md)
 
 ## Run Locally
 
