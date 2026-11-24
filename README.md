@@ -12,6 +12,7 @@ Dokumen perencanaan dan produk sudah dipisah ke folder `docs/`:
 - [docs/roadmap.md](x:/PROJECT%20MANDIRI/budgetin/docs/roadmap.md)
 - [docs/commercialization.md](x:/PROJECT%20MANDIRI/budgetin/docs/commercialization.md)
 - [Tim dan alur kerja pengembangan](docs/tim-dan-alur-kerja.md)
+- [Masukan tim untuk pengembangan Budgetin](docs/masukan-tim-pengembangan.md)
 
 ## Run Locally
 
