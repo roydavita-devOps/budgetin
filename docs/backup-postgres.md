@@ -6,6 +6,8 @@ Pada 24 November 2026, uji menggunakan data sintetis berhasil: dump dibuat, dipu
 
 Pada hari yang sama, backup database produksi dibuat di luar repositori dan dipulihkan ke PostgreSQL sementara tanpa jaringan. Pemeriksaan skema dasar berhasil tanpa menampilkan isi pengguna; ini bukan verifikasi seluruh fungsi aplikasi atau RTO produksi. Pemilik memilih lokasi yang enkripsinya belum terverifikasi dan izinnya masih luas. Arsip tidak dienkripsi oleh skrip; amankan penyimpanan dan batasi aksesnya.
 
+Sebelum rotasi kredensial dalam maintenance pada tanggal yang sama, backup aktual baru dibuat dan diuji lagi pada PostgreSQL terisolasi. Satu backup yang berhasil tidak menggantikan penjadwalan backup dan latihan pemulihan berkala.
+
 Pemilik produk dan operator harus menyepakati frekuensi, retensi, RPO, RTO, penanggung jawab, dan jadwal latihan restore. Belum ada kebijakan yang disetujui atau otomatisasi retensi. Buat monitoring keberhasilan, umur backup terakhir, kapasitas, dan kegagalan restore; jangan menganggap keberadaan file sebagai bukti dapat dipulihkan.
 
 ## Sebelum backup

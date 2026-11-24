@@ -1,6 +1,6 @@
 # Status Pekerjaan Prioritas
 
-Status peninjauan: 24 November 2026. Dokumen ini mencatat kondisi saat perubahan disiapkan; periksa kembali kondisi runtime sebelum melakukan deployment.
+Status peninjauan: 24 November 2026 setelah maintenance. Periksa kembali kondisi runtime untuk perubahan berikutnya.
 
 ## Selesai dalam Kode
 
@@ -18,25 +18,22 @@ Status peninjauan: 24 November 2026. Dokumen ini mencatat kondisi saat perubahan
 - Tes unit backend, bot, dan dashboard dijalankan menggunakan data sintetis; tes rate limit juga dijalankan pada Redis sementara.
 - Tes API integrasi memakai PostgreSQL dan Redis terisolasi, dua akun sintetis, batas WIB, export, dan paginasi lebih dari 500 transaksi.
 - Latihan backup dan restore dengan data sintetis berhasil pada container terisolasi. Backup database produksi juga berhasil dibuat dan dipulihkan pada PostgreSQL sementara tanpa jaringan; pemeriksaan skema dasar berhasil tanpa menampilkan data pengguna. Ini bukan pengujian pemulihan aplikasi secara menyeluruh.
-- Build frontend dan image staging dilakukan terpisah dari layanan production. Uji interaksi browser dan integrasi Telegram langsung belum dilakukan.
+- Build frontend, tes otomatis dan tes integrasi memakai data sintetis berhasil. Setelah deployment, halaman publik dan endpoint kesehatan API yang mengakses database mengembalikan HTTP 200, dan akses transaksi tanpa login ditolak dengan HTTP 401. Uji OTP dan transaksi nyata belum dikonfirmasi.
 
 ## Status Runtime
 
-- Container bot versi baru sudah dijalankan; proses startup terlihat normal. Pengiriman pesan dan alur OTP langsung masih perlu diverifikasi dengan akun uji.
-- Backend dan frontend masih menjalankan versi sebelumnya. Fitur backend dan dashboard pada bagian di atas belum aktif online.
+- Backend, frontend, dan bot versi baru sudah dijalankan; tunnel publik aktif. Proses startup terlihat normal. Pengiriman pesan, alur OTP, tampilan dengan data pengguna, dan transaksi langsung masih perlu diverifikasi dengan akun uji.
+- Password role PostgreSQL, `JWT_SECRET`, dan `BOT_INTERNAL_TOKEN` telah dirotasi; autentikasi database dengan password baru diverifikasi. Port backend, PostgreSQL, dan Redis terikat pada loopback host. Rotasi JWT membatalkan access token lama; refresh token yang masih valid tidak otomatis dicabut.
 - Backup aktual disimpan di luar repositori pada lokasi pilihan pemilik. Enkripsi belum terverifikasi dan izin folder masih luas; backup tidak dienkripsi oleh skrip. Tindak lanjuti enkripsi, pembatasan akses, dan salinan terpisah.
+- Rotasi dilakukan dengan `scripts/rotate-production-secrets.ps1`, yang diuji pada database sementara. Jurnal pemulihan terenkripsi menggunakan Windows DPAPI untuk akun Windows yang menjalankan rotasi, dan disimpan di luar Git. Jurnal tetap sensitif: akses ke akun tersebut dapat memungkinkan dekripsi. Lindungi juga profil dan kunci pemulihannya. Jika rotasi terputus, jangan menjalankan ulang tanpa memeriksa kesesuaian password role dan konfigurasi; koordinasikan pemulihan dengan operator dan jangan tampilkan isi jurnal di log.
 
-## Sebelum Deployment
+## Tindak Lanjut
 
-**Perubahan kode belum otomatis mengubah container yang sedang berjalan.** Pada saat pemeriksaan, backend production masih memakai secret default, password database default, dan port layanan database/cache terikat ke seluruh antarmuka host. Jangan menganggap risiko tersebut sudah tertangani sampai konfigurasi diterapkan dan diverifikasi.
+1. Verifikasi login OTP, tampilan dashboard, transaksi Telegram, dan riwayat dengan akun yang diizinkan, tanpa mencatat OTP atau data pribadi.
+2. Amankan lokasi backup produksi dengan enkripsi dan pembatasan akses, sesuai [panduan backup](backup-postgres.md). Tentukan penanggung jawab, retensi, dan jadwal uji pemulihan.
+3. Gunakan rencana deployment dan rollback untuk perubahan berikutnya. Binding loopback tidak melayani klien yang mengakses langsung port backend atau database dari host lain.
 
-1. Amankan lokasi backup produksi dengan enkripsi dan pembatasan akses, sesuai [panduan backup](backup-postgres.md). Tentukan penanggung jawab, retensi, dan jadwal uji pemulihan.
-2. Siapkan nilai acak untuk `JWT_SECRET` dan `BOT_INTERNAL_TOKEN` yang berbeda dan masing-masing minimal 32 byte. Siapkan password database acak minimal 24 byte. Jangan simpan nilainya di Git atau log.
-3. Koordinasikan perubahan password role PostgreSQL dengan `DATABASE_URL` dan `POSTGRES_PASSWORD` yang digunakan aplikasi. Perubahan `.env` saja tidak mengubah password role dalam database yang sudah ada. Rencanakan pemulihan kredensial dan rollback sebelum memulai.
-4. Pastikan jalur Cloudflare dan frontend menggunakan jaringan Docker. Binding loopback tidak melayani klien yang mengakses langsung port backend atau database dari host lain.
-5. Bangun dan jalankan layanan sesuai prosedur deployment. Verifikasi port, kesehatan layanan, login, bot, ringkasan, dan transaksi dengan akun uji yang diizinkan tanpa mencetak OTP atau data pribadi.
-
-Rotasi JWT membatalkan access token yang ditandatangani kunci lama. Refresh token yang masih valid tidak otomatis dicabut. Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kembali lewat bot, dan mungkin memerlukan bantuan admin.
+Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kembali lewat bot, dan mungkin memerlukan bantuan admin.
 
 ## Risiko dan Pekerjaan Lanjutan
 
