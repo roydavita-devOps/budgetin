@@ -25,7 +25,6 @@ const adminBotCommands = [
   { command: 'admin_broadcast', description: 'Kirim pesan ke semua user aktif' },
 ];
 
-let offset = 0;
 const lastTransactionsByChat = new Map();
 const pendingDeleteTransactionsByChat = new Map();
 
@@ -42,21 +41,50 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 }
 
 async function poll() {
-      console.log('Budgetin Telegram bot started.');
+  console.log('Budgetin Telegram bot started.');
   await setupBotCommands();
+  const poller = createPoller();
   while (true) {
     try {
-      const updates = await telegram('getUpdates', { timeout: pollingTimeoutSeconds, offset });
-      for (const update of updates.result || []) {
-        offset = update.update_id + 1;
-        await handleUpdate(update);
-      }
+      await poller.pollOnce();
     } catch (error) {
       const detail = error.cause?.message ? ` (${error.cause.message})` : '';
       console.error('Polling error:', `${error.message}${detail}`);
       await wait(3000);
     }
   }
+}
+
+class RetryableUpdateError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RetryableUpdateError';
+  }
+}
+
+export function createPoller() {
+  let nextOffset = 0;
+  let lastUpdateAt = Date.now();
+  return {
+    async pollOnce() {
+      const updates = await telegram('getUpdates', { timeout: pollingTimeoutSeconds, offset: nextOffset });
+      if (!Array.isArray(updates.result)) throw new Error('Invalid Telegram updates response');
+      if (updates.result.length === 0 && Date.now() - lastUpdateAt >= 6 * 24 * 60 * 60 * 1000) nextOffset = 0;
+      for (const update of updates.result) {
+        if (!Number.isSafeInteger(update?.update_id) || update.update_id < 0 || update.update_id >= Number.MAX_SAFE_INTEGER || update.update_id < nextOffset) {
+          throw new Error('Invalid Telegram update ID');
+        }
+        lastUpdateAt = Date.now();
+        try {
+          await handleUpdate(update);
+          nextOffset = update.update_id + 1;
+        } catch (error) {
+          if (!(error instanceof RetryableUpdateError)) nextOffset = update.update_id + 1;
+          throw error;
+        }
+      }
+    },
+  };
 }
 
 function isPrivateChatId(chatId) {
@@ -72,7 +100,7 @@ export async function handleUpdate(update) {
     || !Number.isSafeInteger(message.from?.id) || message.chat.id !== message.from.id) return;
 
   if (message.contact) await handleContact(message);
-  if (message.text) await handleMessage(message);
+  if (message.text) return handleMessage(message, update.update_id);
 }
 
 async function setupBotCommands() {
@@ -96,9 +124,10 @@ async function setupAdminBotCommands(chatId) {
   }
 }
 
-async function handleMessage(message) {
+async function handleMessage(message, updateId) {
   const text = message.text.trim();
   const chatId = message.chat.id;
+  const hasUpdateId = Number.isSafeInteger(updateId) && updateId >= 0;
 
   const command = firstCommand(text);
 
@@ -116,7 +145,8 @@ async function handleMessage(message) {
     return sendAboutMessage(chatId);
   }
 
-  const account = await ensureRegistered(message);
+  const parsedTransaction = parseCommand(text);
+  const account = await ensureRegistered(message, Boolean(parsedTransaction.value && hasUpdateId));
   if (!account) return null;
 
   if (command === '/catat') {
@@ -261,29 +291,59 @@ async function handleMessage(message) {
     return updateDisplayName(message, text);
   }
 
-  const parsed = parseCommand(text);
+  const parsed = parsedTransaction;
   if (parsed.error) {
     return sendMessage(chatId, commandErrorMessage(parsed.error));
   }
 
+  let response;
+  let body;
   try {
-    const response = await fetch(`${backendUrl}/telegram/transactions`, {
+    response = await fetch(`${backendUrl}/telegram/transactions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-bot-token': botInternalToken,
       },
-      body: JSON.stringify({ ...parsed.value, telegram_user_id: String(message.from.id) }),
+      body: JSON.stringify({
+        ...parsed.value,
+        telegram_user_id: String(message.from.id),
+        ...(hasUpdateId ? { telegram_update_id: updateId } : {}),
+      }),
+      signal: AbortSignal.timeout(15_000),
     });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Gagal menyimpan transaksi');
-    return sendMessage(chatId, `Tersimpan: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+    body = await response.json();
   } catch (error) {
-    return sendMessage(chatId, `Gagal: ${error.message}`);
+    if (hasUpdateId) throw new RetryableUpdateError('Penyimpanan belum dapat dipastikan; akan dicoba ulang.');
+    return sendMessage(chatId, 'Hasil penyimpanan belum dapat dipastikan. Periksa /riwayat sebelum mencoba lagi.');
+  }
+  if (!response.ok) {
+    if (hasUpdateId && (response.status === 401 || response.status === 408 || response.status === 429 || response.status >= 500)) {
+      throw new RetryableUpdateError('Penyimpanan sementara tidak tersedia; akan dicoba ulang.');
+    }
+    if (response.status === 410) {
+      return sendMessage(chatId, 'Catatan ini sebelumnya sudah diproses dan kemudian dihapus. Tidak ada catatan baru yang dibuat.');
+    }
+    if (response.status === 409) {
+      return sendMessage(chatId, 'Catatan tidak dapat diproses. Periksa /riwayat atau hubungi admin jika masalah berlanjut.');
+    }
+    return sendMessage(chatId, body.error || 'Transaksi tidak dapat disimpan.');
+  }
+  if (!body?.data || !body.data.type || !Number.isFinite(Number(body.data.amount))) {
+    if (hasUpdateId) throw new RetryableUpdateError('Hasil penyimpanan belum dapat dipastikan; akan dicoba ulang.');
+    return sendMessage(chatId, 'Hasil penyimpanan belum dapat dipastikan. Periksa /riwayat sebelum mencoba lagi.');
+  }
+  try {
+    return await sendMessage(chatId, `Tersimpan: ${body.data.type} ${formatIdr(body.data.amount)} ${body.data.category_label}`);
+  } catch (error) {
+    if (hasUpdateId && ![400, 403].includes(error.telegramStatus)) {
+      throw new RetryableUpdateError('Konfirmasi Telegram belum terkirim; akan dicoba ulang.');
+    }
+    console.error('Transaction saved but confirmation could not be delivered.');
   }
 }
 
-async function ensureRegistered(message) {
+async function ensureRegistered(message, retryOnFailure = false) {
   try {
     const account = await fetchTelegramAccount(message.from.id);
     if (account?.is_deleted) {
@@ -307,6 +367,7 @@ async function ensureRegistered(message) {
     await sendUnregisteredMessage(message.chat.id);
     return null;
   } catch (error) {
+    if (retryOnFailure) throw new RetryableUpdateError('Pemeriksaan akun belum berhasil; akan dicoba ulang.');
     await sendMessage(message.chat.id, `Gagal cek akun: ${error.message}`);
     return null;
   }
@@ -399,6 +460,7 @@ async function fetchTelegramAccount(telegramUserId) {
   const params = new URLSearchParams({ telegram_user_id: String(telegramUserId) });
   const response = await fetch(`${backendUrl}/telegram/account?${params.toString()}`, {
     headers: { 'x-bot-token': botInternalToken },
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (response.status === 404) return null;
@@ -1951,7 +2013,9 @@ async function telegram(method, payload) {
   });
   const body = await response.json();
   if (!response.ok || body?.ok === false) {
-    throw new Error(body?.description || `Telegram API error ${response.status}`);
+    const error = new Error(body?.description || `Telegram API error ${response.status}`);
+    error.telegramStatus = Number(body?.error_code || response.status);
+    throw error;
   }
   return body;
 }

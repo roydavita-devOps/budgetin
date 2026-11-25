@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS transactions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS telegram_transaction_updates (
+  telegram_update_id BIGINT PRIMARY KEY CHECK (telegram_update_id >= 0),
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  payload_hash TEXT NOT NULL,
+  transaction_id UUID REFERENCES transactions(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS deletion_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   request_code TEXT NOT NULL UNIQUE,

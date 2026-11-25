@@ -526,6 +526,14 @@ async function ensureDatabaseSchema() {
   await query('ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_user_id_name_key').catch(() => {});
   await query('ALTER TABLE transactions ADD COLUMN IF NOT EXISTS subcategory TEXT');
   await query(`
+    CREATE TABLE IF NOT EXISTS telegram_transaction_updates (
+      telegram_update_id BIGINT PRIMARY KEY CHECK (telegram_update_id >= 0),
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      payload_hash TEXT NOT NULL,
+      transaction_id UUID REFERENCES transactions(id) ON DELETE SET NULL
+    )
+  `);
+  await query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_user_type_parent_name
     ON categories (user_id, type, parent_category, LOWER(name))
     WHERE is_custom = TRUE
@@ -647,10 +655,10 @@ function isValidParentCategory(type, parentCategory) {
   return Boolean(isValidCategoryType(type) && CATEGORY_DEFINITIONS[type]?.some((item) => item.code === parentCategory));
 }
 
-async function findCustomSubcategory(userId, type, parentCategory, name) {
+async function findCustomSubcategory(userId, type, parentCategory, name, execute = query) {
   const normalizedName = normalizeCustomCategoryName(name);
   if (!normalizedName) return null;
-  const result = await query(
+  const result = await execute(
     `SELECT id, user_id, type, parent_category, name, created_at
      FROM categories
      WHERE user_id = $1
@@ -776,6 +784,61 @@ async function createTransactionForUser(userId, body) {
 
   await invalidateSummaryCache(userId);
   return { data: withCategoryLabels(result.rows)[0] };
+}
+
+async function createIdempotentTelegramTransaction(userId, body) {
+  const updateId = body.telegram_update_id;
+  if (!Number.isSafeInteger(updateId) || updateId < 0) {
+    return { status: 400, error: 'telegram_update_id must be a non-negative safe integer' };
+  }
+  const parsed = validateTransaction(body);
+  if (parsed.error) return { status: 400, error: parsed.error };
+  const { type, amount, category, note, subcategory } = parsed.value;
+  const payloadHash = crypto.createHash('sha256')
+    .update(JSON.stringify([type, amount, category, subcategory || null, note]))
+    .digest('hex');
+
+  const result = await inTransaction(async (client) => {
+    const claim = await client.query(
+      `INSERT INTO telegram_transaction_updates (telegram_update_id, user_id, payload_hash)
+       VALUES ($1, $2, $3) ON CONFLICT (telegram_update_id) DO NOTHING RETURNING telegram_update_id`,
+      [updateId, userId, payloadHash],
+    );
+    if (!claim.rowCount) {
+      const existing = await client.query(
+        'SELECT user_id, payload_hash, transaction_id FROM telegram_transaction_updates WHERE telegram_update_id = $1 FOR UPDATE',
+        [updateId],
+      );
+      const row = existing.rows[0];
+      if (row.user_id !== userId || row.payload_hash !== payloadHash) {
+        return { status: 409, error: 'telegram_update_id already used for a different user or payload' };
+      }
+      if (!row.transaction_id) {
+        return { status: 410, error: 'Transaksi untuk telegram_update_id ini sudah dihapus' };
+      }
+      const transaction = await client.query(
+        `SELECT id, type, amount::float AS amount, category, subcategory, note, created_at
+         FROM transactions WHERE id = $1 AND user_id = $2`,
+        [row.transaction_id, userId],
+      );
+      if (!transaction.rows[0]) return { status: 410, error: 'Transaksi untuk telegram_update_id ini sudah dihapus' };
+      return { status: 200, data: withCategoryLabels(transaction.rows)[0] };
+    }
+    if (subcategory && !await findCustomSubcategory(userId, type, category, subcategory, client.query.bind(client))) {
+      await client.query('DELETE FROM telegram_transaction_updates WHERE telegram_update_id = $1', [updateId]);
+      return { status: 400, error: 'subcategory is invalid' };
+    }
+    const inserted = await client.query(
+      `INSERT INTO transactions (user_id, type, amount, category, subcategory, note)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
+      [userId, type, amount, category, subcategory || null, note],
+    );
+    await client.query('UPDATE telegram_transaction_updates SET transaction_id = $2 WHERE telegram_update_id = $1', [updateId, inserted.rows[0].id]);
+    return { status: 201, data: withCategoryLabels(inserted.rows)[0] };
+  });
+  if (result.status === 201) await invalidateSummaryCache(userId);
+  return result;
 }
 
 async function updateTransactionForUser(userId, transactionId, body) {
@@ -1363,6 +1426,16 @@ app.post('/telegram/transactions', botInternalRequired, async (req, res) => {
   const user = await requireLinkedTelegramUser(req, res);
   if (!user) return;
 
+  if (Object.hasOwn(req.body, 'telegram_update_id')) {
+    try {
+      const result = await createIdempotentTelegramTransaction(user.id, req.body);
+      if (result.error) return res.status(result.status).json({ error: result.error });
+      return res.status(result.status).json({ data: result.data });
+    } catch (error) {
+      console.error('Telegram transaction failed:', error.message);
+      return res.status(500).json({ error: 'Transaksi gagal disimpan' });
+    }
+  }
   const result = await createTransactionForUser(user.id, req.body);
   if (result.error) return res.status(400).json({ error: result.error });
   res.status(201).json(result);
