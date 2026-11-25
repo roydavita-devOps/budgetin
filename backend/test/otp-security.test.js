@@ -66,6 +66,9 @@ test('production validation accepts either production signal and rejects missing
   assert.equal(validateRuntimeConfig({ OTP_TRUST_PROXY_HOPS: '' }).proxyHops, 0);
   assert.throws(() => validateRuntimeConfig({ OTP_TRUST_PROXY_HOPS: 'true' }), /OTP_TRUST_PROXY_HOPS/);
   assert.equal(validateRuntimeConfig({ OTP_TRUST_PROXY_HOPS: '2' }).proxyHops, 2);
+  assert.throws(() => validateRuntimeConfig({ INACTIVITY_AUTO_ENABLED: 'yes' }), /INACTIVITY_AUTO_ENABLED/);
+  assert.throws(() => validateRuntimeConfig({ INACTIVITY_AUTO_PURGE_ENABLED: 'true' }), /requires inactivity monitoring/);
+  assert.doesNotThrow(() => validateRuntimeConfig({ INACTIVITY_AUTO_ENABLED: 'true', INACTIVITY_AUTO_PURGE_ENABLED: 'true' }));
 });
 
 test('limits each normalized account across instances and keeps request and verification counters separate', async () => {
@@ -151,11 +154,13 @@ test('OTP requests never create or send codes to old group or mismatched chat ID
   const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start) + start.length));
   let handler;
   let account;
+  let inactive = false;
   const calls = [];
   const context = vm.createContext({
     app: { post: (_path, ...handlers) => { handler = handlers.at(-1); } },
     otpRateLimit: () => () => {},
     findTelegramAccountByPhone: async () => account,
+    isInactiveUser: async () => inactive,
     createOtp: async () => { calls.push('create'); return '123456'; },
     sendTelegramOtp: async (chatId) => { calls.push(chatId); return true; },
   });
@@ -180,6 +185,12 @@ test('OTP requests never create or send codes to old group or mismatched chat ID
   assert.equal(valid.statusCode, 200);
   assert.equal(valid.body.message, genericMessage);
   assert.deepEqual(calls, ['create', '123']);
+  calls.length = 0;
+  inactive = true;
+  const inactiveResponse = await invoke();
+  assert.equal(inactiveResponse.statusCode, 200);
+  assert.equal(inactiveResponse.body.message, genericMessage);
+  assert.deepEqual(calls, []);
 });
 
 test('contact rejects non-private or invalid IDs before looking up or changing data', async () => {

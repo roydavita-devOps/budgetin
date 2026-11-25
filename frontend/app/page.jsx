@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || '/api';
 const storageKey = 'budgetin_session';
 const themeStorageKey = 'budgetin_theme';
+const inactiveMessage = 'Akun kamu nonaktif karena tidak ada transaksi selama 30 hari. Periksa pesan Telegram dari bot Budgetin untuk tombol pertahankan atau hapus akun. Jika pesan belum tiba, ketik /tentang di bot Telegram untuk menghubungi admin.';
 const sidebarItems = [
   { id: 'dashboard', label: 'Dashboard', caption: 'Ringkasan dan statistik utama', icon: DashboardIcon },
   { id: 'kategori', label: 'Kategori', caption: 'Sebaran pemasukan dan pengeluaran', icon: DonutIcon },
@@ -250,6 +251,7 @@ export default function Home() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [authMessage, setAuthMessage] = useState('');
+  const [isInactive, setIsInactive] = useState(false);
   const [user, setUser] = useState(null);
   const [token, setToken] = useState('');
   const [transactions, setTransactions] = useState([]);
@@ -279,12 +281,13 @@ export default function Home() {
   const [isSubcategoryTransactionsModalOpen, setIsSubcategoryTransactionsModalOpen] = useState(false);
   const [subcategoryTransactionsPage, setSubcategoryTransactionsPage] = useState(1);
   const refreshPromiseRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
   const isDeleted = Boolean(token && user?.is_deleted);
   const isPendingVerification = Boolean(token && user && !user.is_verified && !user.is_blocked && !user.is_deleted);
   const isBlocked = Boolean(token && user?.is_blocked && !user.is_deleted);
-  const canViewDashboard = Boolean(token && user?.is_verified && !(isBlocked || isDeleted || isPendingVerification));
+  const canViewDashboard = Boolean(token && user?.is_verified && !(isInactive || isBlocked || isDeleted || isPendingVerification));
   const dataKey = JSON.stringify([token, user?.id, selectedMonth, dataVersion]);
   const dataReady = dataStatus.key === dataKey && !dataStatus.error;
   const dataError = dataStatus.key === dataKey ? dataStatus.error : '';
@@ -360,11 +363,42 @@ export default function Home() {
     setAuthMessage(message);
   }
 
+  function inactiveError() {
+    const error = new Error(inactiveMessage);
+    error.code = 'ACCOUNT_INACTIVE';
+    return error;
+  }
+
+  function checkSessionGeneration(generation) {
+    if (generation !== sessionGenerationRef.current) {
+      const error = new Error('Request tidak berlaku lagi.');
+      error.code = 'REQUEST_SUPERSEDED';
+      throw error;
+    }
+  }
+
+  function handleInactive() {
+    sessionGenerationRef.current += 1;
+    setIsInactive(true);
+    setMonthlyTrendTransactions([]);
+    setCustomCategories([]);
+    setEditingTransaction(null);
+    setIsBulkSelectMode(false);
+    setSelectedTransactionIds([]);
+    setIsBulkEditModalOpen(false);
+    setIsCategoryModalOpen(false);
+    setIsSubcategoryDrawerOpen(false);
+    setIsSubcategoryTransactionsModalOpen(false);
+    clearSession(inactiveMessage);
+    return inactiveError();
+  }
+
   async function refreshSession() {
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
     }
 
+    const generation = sessionGenerationRef.current;
     refreshPromiseRef.current = (async () => {
       try {
         const response = await fetch(`${apiUrl}/auth/refresh`, {
@@ -376,6 +410,8 @@ export default function Home() {
         });
 
         const body = await response.json().catch(() => ({}));
+        checkSessionGeneration(generation);
+        if (!response.ok && body.code === 'ACCOUNT_INACTIVE') throw handleInactive();
         if (!response.ok) {
           throw new Error(body.error || 'Refresh gagal');
         }
@@ -384,7 +420,9 @@ export default function Home() {
         setToken(body.token);
         sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
         return body;
-      } catch {
+      } catch (error) {
+        if (error.code === 'ACCOUNT_INACTIVE' || error.code === 'REQUEST_SUPERSEDED') throw error;
+        checkSessionGeneration(generation);
         await clearSession();
         return null;
       } finally {
@@ -396,6 +434,7 @@ export default function Home() {
   }
 
   async function request(path, options = {}) {
+    const generation = sessionGenerationRef.current;
     const { skipRefresh = false, ...fetchOptions } = options;
     const response = await fetch(`${apiUrl}${path}`, {
       ...fetchOptions,
@@ -404,9 +443,14 @@ export default function Home() {
         'Content-Type': 'application/json',
         ...(fetchOptions.headers || {}),
       },
+    }).catch((error) => {
+      checkSessionGeneration(generation);
+      throw error;
     });
 
     const body = await response.json().catch(() => ({}));
+    checkSessionGeneration(generation);
+    if (!response.ok && body.code === 'ACCOUNT_INACTIVE') throw handleInactive();
     const shouldTryRefresh = response.status === 401
       && !skipRefresh
       && token
@@ -414,6 +458,7 @@ export default function Home() {
 
     if (shouldTryRefresh) {
       const refreshed = await refreshSession();
+      checkSessionGeneration(generation);
       if (refreshed?.token) {
         return request(path, {
           ...options,
@@ -441,9 +486,10 @@ export default function Home() {
         method: 'POST',
         body: JSON.stringify({ phone_number: phoneNumber }),
       });
+      setIsInactive(false);
       setAuthMessage(body.message || 'OTP dikirim ke Telegram.');
     } catch (error) {
-      setAuthMessage(error.message);
+      if (error.code !== 'REQUEST_SUPERSEDED') setAuthMessage(error.message);
     }
   }
 
@@ -454,12 +500,13 @@ export default function Home() {
         method: 'POST',
         body: JSON.stringify({ phone_number: phoneNumber, code: otpCode }),
       });
+      setIsInactive(false);
       setUser(body.user);
       setToken(body.token);
       sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
       setAuthMessage('Login berhasil.');
     } catch (error) {
-      setAuthMessage(error.message);
+      if (error.code !== 'REQUEST_SUPERSEDED') setAuthMessage(error.message);
     }
   }
 
@@ -677,6 +724,7 @@ export default function Home() {
 
   async function exportCsv() {
     if (!token) return;
+    const generation = sessionGenerationRef.current;
     const params = new URLSearchParams({ month: exportFilters.month });
     if (exportFilters.type) params.set('type', exportFilters.type);
     if (exportFilters.category) params.set('category', exportFilters.category);
@@ -686,6 +734,12 @@ export default function Home() {
       headers: exportHeaders,
       credentials: 'include',
     });
+    checkSessionGeneration(generation);
+    if (!response.ok) {
+      const body = await response.clone().json().catch(() => ({}));
+      checkSessionGeneration(generation);
+      if (body.code === 'ACCOUNT_INACTIVE') throw handleInactive();
+    }
     if (response.status === 401) {
       const refreshed = await refreshSession();
       if (refreshed?.token) {
@@ -694,6 +748,12 @@ export default function Home() {
           headers: exportHeaders,
           credentials: 'include',
         });
+        checkSessionGeneration(generation);
+        if (!response.ok) {
+          const body = await response.clone().json().catch(() => ({}));
+          checkSessionGeneration(generation);
+          if (body.code === 'ACCOUNT_INACTIVE') throw handleInactive();
+        }
       }
     }
     if (!response.ok) throw new Error('Export gagal');
@@ -770,7 +830,9 @@ export default function Home() {
         setUser(body.user);
         sessionStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
       })
-      .catch(() => clearSession());
+      .catch((error) => {
+        if (error.code !== 'ACCOUNT_INACTIVE' && error.code !== 'REQUEST_SUPERSEDED') clearSession();
+      });
   }, [token]);
 
   useEffect(() => {
@@ -1031,7 +1093,7 @@ export default function Home() {
                   </label>
                   <button className="brand-button rounded-2xl px-4 py-3 font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={verifyOtp}>Masuk</button>
                 </div>
-                <p className="muted-text text-sm">{authMessage || 'Masuk untuk melihat dashboard pribadi kamu.'}</p>
+                <p className="muted-text text-sm" role={isInactive ? 'alert' : undefined}>{authMessage || 'Masuk untuk melihat dashboard pribadi kamu.'}</p>
               </div>
             </section>
           )}

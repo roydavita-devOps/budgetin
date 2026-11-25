@@ -23,7 +23,7 @@ function loadSubject({ query = async () => { throw new Error('Unexpected query')
   const declarations = [
     "const appTimeZone = 'Asia/Jakarta';",
     section('const CATEGORY_DEFINITIONS =', 'const corsOrigins ='),
-    section('async function invalidateSummaryCache(', 'async function issueAuthSession('),
+    section('async function invalidateSummaryCache(', 'async function inTransaction('),
     section('function normalizeInput(', 'function normalizeCustomCategoryName('),
     section('function normalizeCustomCategoryName(', 'function isValidCategoryType('),
     section('function validateTransaction(', 'function transactionOrder('),

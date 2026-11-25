@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,6 +8,7 @@ const backendUrl = process.env.BACKEND_URL || 'http://backend:4000';
 const botInternalToken = process.env.BOT_INTERNAL_TOKEN || 'budgetin_internal_dev_token';
 const webAppUrl = process.env.WEB_APP_URL || 'https://budgetin.seni.my.id/';
 const pollingTimeoutSeconds = Math.max(1, Number(process.env.TELEGRAM_POLL_TIMEOUT_SECONDS || 10));
+const pollOwnerId = randomBytes(16).toString('base64url');
 
 const defaultBotCommands = [
   { command: 'mulai', description: 'Mulai dan hubungkan akun' },
@@ -25,7 +27,6 @@ const adminBotCommands = [
   { command: 'admin_broadcast', description: 'Kirim pesan ke semua user aktif' },
 ];
 
-let offset = 0;
 const lastTransactionsByChat = new Map();
 const pendingDeleteTransactionsByChat = new Map();
 
@@ -42,21 +43,151 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 }
 
 async function poll() {
-      console.log('Budgetin Telegram bot started.');
+  console.log('Budgetin Telegram bot started.');
   await setupBotCommands();
+  const poller = createPoller();
   while (true) {
     try {
-      const updates = await telegram('getUpdates', { timeout: pollingTimeoutSeconds, offset });
-      for (const update of updates.result || []) {
-        offset = update.update_id + 1;
-        await handleUpdate(update);
-      }
+      const outcome = await poller.pollOnce();
+      if (outcome === 'retry' || outcome === 'heartbeat_failed') await wait(3000);
     } catch (error) {
       const detail = error.cause?.message ? ` (${error.cause.message})` : '';
       console.error('Polling error:', `${error.message}${detail}`);
       await wait(3000);
     }
   }
+}
+
+export function createPoller() {
+  let offset = 0;
+  let session = null;
+  let beginRequestId = null;
+  let pollingStopped = false;
+
+  async function pollOnce() {
+    if (pollingStopped) return 'retry';
+    if (!session) {
+      try {
+        if (!beginRequestId) beginRequestId = randomBytes(16).toString('base64url');
+        const response = await fetch(`${backendUrl}/telegram/inactivity/poll-begin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-bot-token': botInternalToken },
+          body: JSON.stringify({ ownerId: pollOwnerId, requestId: beginRequestId }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) throw new Error('Poll begin rejected');
+        const body = await response.json();
+        if (body?.enabled === false) {
+          session = { enabled: false, phase: 'poll' };
+        } else if (body?.enabled === true && typeof body.token === 'string'
+          && /^[A-Za-z0-9_-]{22}(?![\s\S])/.test(body.token)) {
+          session = { enabled: true, token: body.token, phase: 'poll' };
+        } else {
+          throw new Error('Invalid poll begin response');
+        }
+        beginRequestId = null;
+      } catch {
+        console.error('Inactivity poll begin failed.');
+        return 'heartbeat_failed';
+      }
+    }
+
+    if (session.phase === 'poll') {
+      let updates;
+      try {
+        updates = await telegram('getUpdates', {
+          timeout: pollingTimeoutSeconds, offset, allowed_updates: ['message', 'callback_query'],
+        });
+        if (!Array.isArray(updates.result)) throw new Error('Invalid Telegram updates response');
+      } catch (error) {
+        if (!session.enabled) session = null;
+        throw error;
+      }
+      if (updates.result.length === 0) {
+        if (!session.enabled) {
+          session = null;
+          return 'disabled';
+        }
+        session.phase = 'confirm';
+      } else {
+        session.phase = 'batch';
+        session.updates = updates.result;
+        session.index = 0;
+      }
+    }
+
+    if (session.phase === 'batch') {
+      while (session.index < session.updates.length) {
+        const update = session.updates[session.index];
+        if (!Number.isSafeInteger(update?.update_id) || update.update_id < offset) {
+          console.error('Invalid Telegram update ID; polling stopped for manual review.');
+          if (!session.enabled) {
+            session = null;
+            pollingStopped = true;
+            return 'retry';
+          }
+          session.phase = 'unsafe';
+          session.stopAfterUnsafe = true;
+          break;
+        }
+        if (update.callback_query) {
+          if (!session.pending) session.pending = { acknowledged: false, warned: false };
+          let outcome;
+          try {
+            outcome = await handleUpdate(update, session.pending);
+          } catch {
+            outcome = 'retry';
+          }
+          if (outcome !== 'terminal') return 'retry';
+          offset = update.update_id + 1;
+          session.pending = null;
+        } else {
+          offset = update.update_id + 1;
+          try {
+            await handleUpdate(update);
+          } catch (error) {
+            if (!session.enabled) {
+              session = null;
+              throw error;
+            }
+            console.error('Telegram update failed; marking inactivity polling unsafe.');
+            session.phase = 'unsafe';
+            break;
+          }
+        }
+        session.index += 1;
+      }
+      if (session.phase !== 'unsafe' && !session.enabled) {
+        session = null;
+        return 'processed';
+      }
+      if (session.phase !== 'unsafe') {
+        session.phase = 'complete';
+      }
+    }
+
+    const phase = session.phase;
+    try {
+      const endpoint = phase === 'confirm' ? 'drained' : phase === 'unsafe' ? 'unsafe' : 'complete';
+      const response = await fetch(`${backendUrl}/telegram/inactivity/poll-${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-bot-token': botInternalToken },
+        body: JSON.stringify({ token: session.token, ownerId: pollOwnerId }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error('Poll completion rejected');
+      const body = await response.json();
+      if (body?.success !== true) throw new Error('Invalid poll completion response');
+      if (phase === 'unsafe' && session.stopAfterUnsafe) pollingStopped = true;
+      session = null;
+      return phase === 'confirm' ? 'drained' : 'processed';
+    } catch {
+      console.error('Inactivity poll completion failed.');
+      return 'heartbeat_failed';
+    }
+  }
+
+  return { pollOnce };
 }
 
 function isPrivateChatId(chatId) {
@@ -66,13 +197,90 @@ function isPrivateChatId(chatId) {
     && Number.isSafeInteger(Number(chatId));
 }
 
-export async function handleUpdate(update) {
+export async function handleUpdate(update, callbackContext = {}) {
+  if (update?.callback_query) return handleCallbackQuery(update.callback_query, callbackContext);
+
   const message = update?.message;
   if (message?.chat?.type !== 'private' || !isPrivateChatId(message.chat.id)
     || !Number.isSafeInteger(message.from?.id) || message.chat.id !== message.from.id) return;
 
   if (message.contact) await handleContact(message);
   if (message.text) await handleMessage(message);
+}
+
+async function handleCallbackQuery(callback, context) {
+  if (typeof callback.id !== 'string' || !callback.id) return 'terminal';
+
+  const chat = callback.message?.chat;
+  const senderId = callback.from?.id;
+  const match = typeof callback.data === 'string'
+    ? /^inactive:(keep|delete):([A-Za-z0-9_-]{22})(?![\s\S])/.exec(callback.data)
+    : null;
+  const valid = chat?.type === 'private' && isPrivateChatId(chat.id)
+    && Number.isSafeInteger(senderId) && chat.id === senderId && match;
+
+  if (!context.acknowledged) {
+    context.acknowledged = true;
+    try {
+      await telegram('answerCallbackQuery', {
+        callback_query_id: callback.id,
+        ...(valid ? {} : { text: 'Tombol ini tidak dapat digunakan.' }),
+      });
+    } catch {
+      // A failed acknowledgement must not discard a valid response.
+    }
+  }
+  if (!valid) return 'terminal';
+
+  const [, action, responseToken] = match;
+  let resultText = 'Respons belum dapat dipastikan. Periksa peringatan pribadi Telegram atau hubungi admin melalui /tentang.';
+  let terminal = false;
+  try {
+    const response = await fetch(`${backendUrl}/telegram/inactivity/response`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bot-token': botInternalToken,
+      },
+      body: JSON.stringify({ telegram_user_id: String(senderId), action, token: responseToken }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (response.ok) {
+      const body = await response.json();
+      const safeMessage = typeof body?.message === 'string'
+        ? body.message.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '')
+          .split(responseToken).join('[disembunyikan]').trim().slice(0, 1000)
+        : '';
+      if (body && typeof body === 'object' && !Array.isArray(body)
+        && body.ok !== false && body.success !== false
+        && (body.success === true || safeMessage)) {
+        terminal = true;
+        resultText = safeMessage || 'Respons diterima.';
+      }
+    } else if (response.status === 409) {
+      const body = await response.json();
+      if (body?.code === 'INACTIVITY_DISABLED') {
+        terminal = true;
+        resultText = context.warned
+          ? 'Penghapusan sementara tidak tersedia. Permintaan ini tidak menghapus akun. Status percobaan sebelumnya belum pasti; hubungi admin melalui /tentang.'
+          : 'Penghapusan sementara tidak tersedia. Akun tidak dihapus.';
+      } else if (body?.error === 'Peringatan tidak berlaku lagi atau sudah diproses.') {
+        terminal = true;
+        resultText = 'Peringatan ini tidak berlaku lagi atau sudah diproses. Periksa status akun atau hubungi admin melalui /tentang.';
+      }
+    }
+  } catch {
+    // Keep this update unacknowledged when the backend outcome is uncertain.
+  }
+  if (terminal || !context.warned) {
+    if (!terminal) context.warned = true;
+    try {
+      await sendMessage(chat.id, resultText);
+    } catch {
+      // Telegram delivery is independent of the backend's terminal result.
+    }
+  }
+  return terminal ? 'terminal' : 'retry';
 }
 
 async function setupBotCommands() {
@@ -300,6 +508,10 @@ async function ensureRegistered(message) {
           'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
         ].join('\n'),
       );
+      return null;
+    }
+    if (account?.is_inactive) {
+      await sendMessage(message.chat.id, 'Periksa peringatan pribadi Telegram untuk menanggapi status akun. Jika peringatan belum terkirim, hubungi admin melalui /tentang.');
       return null;
     }
     if (account) return account;

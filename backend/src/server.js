@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { createClient } from 'redis';
 import { pool, query } from './db.js';
+import { createInactivityService, ensureInactivitySchema } from './inactivity.js';
 
 export function validateRuntimeConfig(env) {
   const production = env.NODE_ENV === 'production' || String(env.COOKIE_SECURE || '').toLowerCase() === 'true';
@@ -39,6 +40,14 @@ export function validateRuntimeConfig(env) {
   if (hops && (!/^[1-9]\d*$/.test(hops) || !Number.isSafeInteger(Number(hops)))) {
     throw new Error('OTP_TRUST_PROXY_HOPS must be a positive integer when configured');
   }
+  for (const key of ['INACTIVITY_AUTO_ENABLED', 'INACTIVITY_AUTO_PURGE_ENABLED']) {
+    const value = String(env[key] || '').trim().toLowerCase();
+    if (value && !['true', 'false'].includes(value)) throw new Error(`${key} must be true or false`);
+  }
+  if (String(env.INACTIVITY_AUTO_PURGE_ENABLED || '').trim().toLowerCase() === 'true'
+    && String(env.INACTIVITY_AUTO_ENABLED || '').trim().toLowerCase() !== 'true') {
+    throw new Error('Automatic inactivity purge requires inactivity monitoring');
+  }
   return { production, proxyHops: hops ? Number(hops) : 0 };
 }
 
@@ -53,9 +62,28 @@ const adminPhoneNumber = normalizePhone(process.env.ADMIN_PHONE_NUMBER || '08139
 const refreshTokenTtlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS || 14);
 const refreshCookieName = process.env.REFRESH_COOKIE_NAME || 'budgetin_refresh_token';
 const refreshCookieSecure = String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true';
+const inactivityEnabled = String(process.env.INACTIVITY_AUTO_ENABLED || '').trim().toLowerCase() === 'true';
+const inactivityAutoPurgeEnabled = String(process.env.INACTIVITY_AUTO_PURGE_ENABLED || '').trim().toLowerCase() === 'true';
+const adminPhoneDigits = adminPhoneNumber.replace(/\D/g, '');
 const appTimeZone = 'Asia/Jakarta';
 const jakartaDayStartSql = `(DATE_TRUNC('day', NOW() AT TIME ZONE '${appTimeZone}') AT TIME ZONE '${appTimeZone}')`;
 const jakartaMonthStartSql = `(DATE_TRUNC('month', NOW() AT TIME ZONE '${appTimeZone}') AT TIME ZONE '${appTimeZone}')`;
+const inactiveConditionSql = `(
+  NOT u.is_admin AND NOT u.is_blocked AND NOT u.is_deleted
+  AND NOT EXISTS (
+    SELECT 1 FROM (
+      SELECT regexp_replace(COALESCE(u.phone_number, ''), '[^0-9]', '', 'g') AS digits
+      UNION ALL
+      SELECT regexp_replace(COALESCE(ta.phone_number, ''), '[^0-9]', '', 'g')
+      FROM telegram_accounts ta WHERE ta.user_id = u.id
+    ) admin_numbers
+    WHERE (CASE WHEN left(digits, 1) = '0' THEN '62' || substr(digits, 2) ELSE digits END) = '${adminPhoneDigits}'
+  ) AND (
+    EXISTS (SELECT 1 FROM inactivity_cases ic WHERE ic.user_id = u.id)
+    OR (${inactivityEnabled ? 'TRUE' : 'FALSE'} AND u.inactivity_enrolled_at IS NOT NULL
+      AND GREATEST(u.inactivity_enrolled_at, u.last_transaction_activity_at) <= clock_timestamp() - INTERVAL '30 days')
+  )
+)`;
 
 const CATEGORY_DEFINITIONS = {
   expense: [
@@ -257,6 +285,45 @@ async function inTransaction(operation) {
   }
 }
 
+const inactivityService = createInactivityService({
+  pool,
+  protectedPhone: adminPhoneNumber,
+  autoPurgeEnabled: inactivityAutoPurgeEnabled,
+  retrySeconds: 3600,
+  async sendAlert({ telegramUserId, chatId, text, reply_markup }) {
+    if (!telegramBotToken || !isPrivateTelegramChat(telegramUserId, chatId)) return false;
+    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, reply_markup }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const body = await response.json().catch(() => null);
+    return response.ok && body?.ok === true && String(body?.result?.chat?.id || '') === String(chatId);
+  },
+  async invalidateCache(userId) {
+    const keys = await redis.keys(`summary:${userId}:*`);
+    if (keys.length) await redis.del(keys);
+  },
+});
+
+let inactivityWorkerRunning = false;
+async function runInactivityWorker() {
+  if (!inactivityEnabled || inactivityWorkerRunning) return;
+  inactivityWorkerRunning = true;
+  try {
+    const result = await inactivityService.runOnce();
+    if (result.cacheInvalidationFailures) console.error('Inactivity cleanup could not clear some cached summaries.');
+    if (result.enrollmentFailures || result.alertFailures || result.purgeFailures) {
+      console.error('Some inactivity operations need retry.');
+    }
+  } catch (error) {
+    console.error('Inactivity worker failed:', error.code || 'service error');
+  } finally {
+    inactivityWorkerRunning = false;
+  }
+}
+
 async function issueAuthSession(res, user, previousRefreshToken = '') {
   if (previousRefreshToken) {
     await revokeRefreshToken(previousRefreshToken);
@@ -321,13 +388,13 @@ function generateOtp() {
   return crypto.randomInt(100000, 1000000).toString();
 }
 
-async function createOtp(phoneNumber, purpose = 'login') {
+async function createOtp(phoneNumber, userId, purpose = 'login') {
   const code = generateOtp();
   const codeHash = await bcrypt.hash(code, 10);
   await query(
-    `INSERT INTO otp_codes (phone_number, code_hash, purpose, expires_at)
-     VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
-    [phoneNumber, codeHash, purpose],
+    `INSERT INTO otp_codes (phone_number, code_hash, purpose, expires_at, user_id)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes', $4)`,
+    [phoneNumber, codeHash, purpose, userId],
   );
   return code;
 }
@@ -390,6 +457,7 @@ async function findLinkedTelegramUser(telegramUserId) {
        u.deleted_at,
        u.delete_recovery_until,
        u.created_at,
+       ${inactiveConditionSql} AS is_inactive,
        ta.telegram_user_id,
        ta.telegram_chat_id,
        ta.username,
@@ -467,9 +535,21 @@ function deletedRequired(res) {
   });
 }
 
+function inactiveRequired(res) {
+  return res.status(403).json({
+    code: 'ACCOUNT_INACTIVE',
+    error: 'Akun nonaktif karena tidak ada transaksi selama 30 hari. Periksa peringatan di bot Telegram atau hubungi admin melalui /tentang.',
+  });
+}
+
+async function isInactiveUser(userId) {
+  const result = await query(`SELECT ${inactiveConditionSql} AS inactive FROM users u WHERE u.id = $1`, [userId]);
+  return Boolean(result.rows[0]?.inactive);
+}
+
 async function webFeatureRequired(req, res, next) {
   const result = await query(
-    'SELECT is_verified, is_blocked, is_deleted FROM users WHERE id = $1',
+    `SELECT u.is_verified, u.is_blocked, u.is_deleted, ${inactiveConditionSql} AS is_inactive FROM users u WHERE u.id = $1`,
     [req.user.id],
   );
   const user = result.rows[0];
@@ -477,6 +557,7 @@ async function webFeatureRequired(req, res, next) {
   if (!user) return res.status(401).json({ error: 'User tidak ditemukan' });
   if (user.is_deleted) return deletedRequired(res);
   if (user.is_blocked) return blockRequired(res);
+  if (user.is_inactive) return inactiveRequired(res);
   if (!user.is_verified) return verificationRequired(res);
 
   return next();
@@ -500,6 +581,10 @@ async function requireLinkedTelegramUser(req, res) {
   }
   if (user.is_blocked) {
     blockRequired(res);
+    return null;
+  }
+  if (user.is_inactive) {
+    inactiveRequired(res);
     return null;
   }
 
@@ -545,6 +630,7 @@ async function ensureDatabaseSchema() {
   await query(`
     CREATE TABLE IF NOT EXISTS otp_codes (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      user_id UUID REFERENCES users(id) ON DELETE CASCADE,
       phone_number TEXT NOT NULL,
       code_hash TEXT NOT NULL,
       purpose TEXT NOT NULL DEFAULT 'login',
@@ -553,6 +639,7 @@ async function ensureDatabaseSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await query('ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE');
   await query(`
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -767,15 +854,29 @@ async function createTransactionForUser(userId, body) {
     if (!customSubcategory) return { error: 'subcategory is invalid' };
   }
 
-  const result = await query(
-    `INSERT INTO transactions (user_id, type, amount, category, subcategory, note)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
-    [userId, type, amount, category, subcategory || null, note],
-  );
+  const result = await inTransaction(async (client) => {
+    const account = await client.query(
+      `SELECT u.id, u.is_deleted, u.is_blocked, ${inactiveConditionSql} AS is_inactive
+       FROM users u WHERE u.id = $1 FOR UPDATE`,
+      [userId],
+    );
+    const user = account.rows[0];
+    if (!user) return { status: 401, error: 'User tidak ditemukan' };
+    if (user.is_deleted || user.is_blocked) return { status: 403, error: 'Akun tidak aktif.' };
+    if (user.is_inactive) return { status: 403, code: 'ACCOUNT_INACTIVE', error: 'Akun nonaktif. Periksa peringatan di bot Telegram.' };
+    const inserted = await client.query(
+      `INSERT INTO transactions (user_id, type, amount, category, subcategory, note)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, type, amount::float AS amount, category, subcategory, note, created_at`,
+      [userId, type, amount, category, subcategory || null, note],
+    );
+    await client.query('UPDATE users SET last_transaction_activity_at = clock_timestamp() WHERE id = $1 AND inactivity_enrolled_at IS NOT NULL', [userId]);
+    return { data: withCategoryLabels(inserted.rows)[0] };
+  });
 
+  if (result.error) return result;
   await invalidateSummaryCache(userId);
-  return { data: withCategoryLabels(result.rows)[0] };
+  return result;
 }
 
 async function updateTransactionForUser(userId, transactionId, body) {
@@ -1064,8 +1165,9 @@ app.post('/auth/register', async (req, res) => {
 
   try {
     const result = await query(
-      `INSERT INTO users (email, password) VALUES ($1, $2) RETURNING ${userReturnFields}`,
-      [email, passwordHash],
+      `INSERT INTO users (email, password, inactivity_enrolled_at)
+       VALUES ($1, $2, CASE WHEN $3 THEN clock_timestamp() ELSE NULL END) RETURNING ${userReturnFields}`,
+      [email, passwordHash, inactivityEnabled],
     );
     const user = result.rows[0];
     await seedDefaultCategories(user.id);
@@ -1085,6 +1187,7 @@ app.post('/auth/login', async (req, res) => {
   if (!user || !(await bcrypt.compare(password, user.password))) {
     return res.status(401).json({ error: 'invalid credentials' });
   }
+  if (await isInactiveUser(user.id)) return inactiveRequired(res);
 
   return res.json(
     await issueAuthSession(res, {
@@ -1112,8 +1215,9 @@ app.post('/auth/request-otp', otpRateLimit('request'), async (req, res) => {
   }
 
   const account = await findTelegramAccountByPhone(phoneNumber);
-  if (account && isPrivateTelegramChat(account.telegram_user_id, account.telegram_chat_id)) {
-    const code = await createOtp(phoneNumber);
+  if (account && isPrivateTelegramChat(account.telegram_user_id, account.telegram_chat_id)
+    && !(await isInactiveUser(account.user_id))) {
+    const code = await createOtp(phoneNumber, account.user_id);
     try {
       if (!(await sendTelegramOtp(account.telegram_chat_id, code))) console.error('OTP delivery failed');
     } catch {
@@ -1121,7 +1225,7 @@ app.post('/auth/request-otp', otpRateLimit('request'), async (req, res) => {
     }
   }
 
-  return res.json({ message: 'Jika nomor sudah terhubung, periksa OTP di chat pribadi bot Budgetin. Jika belum, gunakan /mulai atau /hubungkan_ulang.', expires_in_seconds: 600 });
+  return res.json({ message: 'Jika nomor sudah terhubung, periksa OTP di chat pribadi bot Budgetin. Jika belum, gunakan /mulai atau /hubungkan_ulang. Jika akun nonaktif, periksa peringatan bot atau hubungi admin melalui /tentang.', expires_in_seconds: 600 });
 });
 
 app.post('/auth/verify-otp', otpRateLimit('verify'), async (req, res) => {
@@ -1157,13 +1261,14 @@ app.post('/auth/verify-otp', otpRateLimit('verify'), async (req, res) => {
   }
 
   const userResult = await query(
-    `INSERT INTO users (phone_number)
-     VALUES ($1)
+    `INSERT INTO users (phone_number, inactivity_enrolled_at)
+     VALUES ($1, CASE WHEN $2 THEN clock_timestamp() ELSE NULL END)
      ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
      RETURNING ${userReturnFields}`,
-    [phoneNumber],
+    [phoneNumber, inactivityEnabled],
   );
   const user = userResult.rows[0];
+  if (await isInactiveUser(user.id)) return inactiveRequired(res);
   await seedDefaultCategories(user.id);
 
   return res.json(await issueAuthSession(res, user));
@@ -1210,6 +1315,12 @@ app.post('/auth/refresh', async (req, res) => {
     return res.status(401).json({ error: 'Refresh token tidak valid atau sudah kedaluwarsa' });
   }
 
+  if (await isInactiveUser(user.id)) {
+    await revokeRefreshToken(refreshToken);
+    clearRefreshTokenCookie(res);
+    return inactiveRequired(res);
+  }
+
   await query('UPDATE refresh_tokens SET last_used_at = NOW() WHERE id = $1', [user.refresh_token_id]);
   return res.json(await issueAuthSession(res, user, refreshToken));
 });
@@ -1223,6 +1334,8 @@ app.post('/auth/logout', async (req, res) => {
 
 app.get('/me', authRequired, async (req, res) => {
   const result = await query(`SELECT ${userReturnFields} FROM users WHERE id = $1`, [req.user.id]);
+  if (!result.rows[0]) return res.status(401).json({ error: 'User tidak ditemukan' });
+  if (await isInactiveUser(req.user.id)) return inactiveRequired(res);
   res.json({ user: result.rows[0] });
 });
 
@@ -1238,6 +1351,97 @@ app.get('/telegram/account', botInternalRequired, async (req, res) => {
   }
 
   return res.json({ user });
+});
+
+app.post('/telegram/inactivity/response', botInternalRequired, async (req, res) => {
+  const telegramUserId = String(req.body.telegram_user_id || '').trim();
+  const action = String(req.body.action || '');
+  const token = String(req.body.token || '');
+  if (!isPrivateTelegramChat(telegramUserId, telegramUserId)
+    || !['keep', 'delete'].includes(action) || !/^[A-Za-z0-9_-]{22}$/.test(token)) {
+    return res.status(400).json({ error: 'Respons tidak valid.' });
+  }
+  if (action === 'delete' && !inactivityEnabled) {
+    return res.status(409).json({ code: 'INACTIVITY_DISABLED', error: 'Penghapusan sementara tidak tersedia. Akun tidak dihapus.' });
+  }
+  try {
+    const result = await inactivityService.handleCallback({ telegramUserId, chatId: telegramUserId, data: `inactive:${action}:${token}` });
+    if (result.outcome === 'kept') return res.json({ message: 'Akun kamu aktif kembali. Hitungan 30 hari dimulai ulang.' });
+    if (result.outcome === 'deleted') {
+      if (result.cacheInvalidationFailed) console.error('Inactivity cleanup could not clear a cached summary.');
+      return res.json({ message: 'Akun dan data yang terhubung telah dihapus permanen dari database.' });
+    }
+    return res.status(409).json({ error: 'Peringatan tidak berlaku lagi atau sudah diproses.' });
+  } catch (error) {
+    console.error('Inactivity response failed:', error.code || 'service error');
+    return res.status(500).json({ error: 'Respons belum dapat diproses. Silakan coba lagi.' });
+  }
+});
+
+app.post('/telegram/inactivity/poll-begin', botInternalRequired, async (req, res) => {
+  if (!inactivityEnabled) return res.json({ enabled: false });
+  const ownerId = String(req.body.ownerId || '');
+  const requestId = String(req.body.requestId || '');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(ownerId) || !/^[A-Za-z0-9_-]{22}$/.test(requestId)) return res.status(400).json({ error: 'Identitas polling tidak valid.' });
+  try {
+    const { token } = await inactivityService.beginPoll({ ownerId, requestId });
+    return res.json({ enabled: true, token });
+  } catch (error) {
+    console.error('Inactivity poll begin failed:', error.code || 'service error');
+    return res.status(503).json({ error: 'Polling sementara tidak tersedia.' });
+  }
+});
+
+app.post('/telegram/inactivity/poll-complete', botInternalRequired, async (req, res) => {
+  if (!inactivityEnabled) return res.status(409).json({ error: 'Pemantauan tidak aktif.' });
+  const ownerId = String(req.body.ownerId || '');
+  const token = String(req.body.token || '');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(ownerId) || !/^[A-Za-z0-9_-]{22}$/.test(token)) {
+    return res.status(400).json({ error: 'Token polling tidak valid.' });
+  }
+  try {
+    if (!(await inactivityService.completePollBatch({ ownerId, token }))) return res.status(409).json({ error: 'Polling tidak lagi berlaku.' });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Inactivity poll completion failed:', error.code || 'service error');
+    return res.status(503).json({ error: 'Konfirmasi polling sementara tidak tersedia.' });
+  }
+});
+
+app.post('/telegram/inactivity/poll-unsafe', botInternalRequired, async (req, res) => {
+  if (!inactivityEnabled) return res.status(409).json({ error: 'Pemantauan tidak aktif.' });
+  const ownerId = String(req.body.ownerId || '');
+  const token = String(req.body.token || '');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(ownerId) || !/^[A-Za-z0-9_-]{22}$/.test(token)) {
+    return res.status(400).json({ error: 'Token polling tidak valid.' });
+  }
+  try {
+    if (!(await inactivityService.markPollUnsafe({ ownerId, token }))) return res.status(409).json({ error: 'Polling tidak lagi berlaku.' });
+    console.error('Inactivity automatic purge suspended: polling requires review.');
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Inactivity poll safety update failed:', error.code || 'service error');
+    return res.status(503).json({ error: 'Pemeriksaan polling sementara tidak tersedia.' });
+  }
+});
+
+app.post('/telegram/inactivity/poll-drained', botInternalRequired, async (req, res) => {
+  if (!inactivityEnabled) return res.status(409).json({ error: 'Pemantauan tidak aktif.' });
+  const token = String(req.body.token || '');
+  const ownerId = String(req.body.ownerId || '');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(token) || !/^[A-Za-z0-9_-]{22}$/.test(ownerId)) return res.status(400).json({ error: 'Token polling tidak valid.' });
+  try {
+    const outcome = await inactivityService.confirmPollDrained({ ownerId, token });
+    if (!outcome) return res.status(409).json({ error: 'Polling tidak lagi berlaku.' });
+    if (outcome === 'new') {
+      const result = await inactivityService.purgeEligible({ limit: 5 });
+      if (result.purgeFailures || result.cacheInvalidationFailures) console.error('Some inactivity cleanup operations need retry.');
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Inactivity poll confirmation failed:', error.code || 'service error');
+    return res.status(503).json({ error: 'Konfirmasi polling sementara tidak tersedia.' });
+  }
 });
 
 app.post('/telegram/contact', botInternalRequired, async (req, res) => {
@@ -1257,6 +1461,10 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
   const existingTelegramAccount = await findTelegramAccountByTelegramUserId(telegramUserId);
   const existingPhoneAccount = await findTelegramAccountByPhone(phoneNumber);
 
+  const existingUser = await query('SELECT id FROM users WHERE phone_number = $1 LIMIT 1', [phoneNumber]);
+  const ownerId = existingTelegramAccount?.user_id || existingUser.rows[0]?.id;
+  if (ownerId && await isInactiveUser(ownerId)) return inactiveRequired(res);
+
   if (existingPhoneAccount && existingPhoneAccount.telegram_user_id !== telegramUserId) {
     return res.status(409).json({
       error: 'Nomor ini sudah terhubung ke akun Telegram lain. Untuk keamanan, data tidak dipindahkan otomatis.',
@@ -1273,23 +1481,25 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
     }
 
     const userResult = await query(
-      `UPDATE users
+      `UPDATE users u
        SET phone_number = $1
-       WHERE id = $2
+       WHERE id = $2 AND NOT ${inactiveConditionSql}
        RETURNING ${userReturnFields}`,
       [phoneNumber, existingTelegramAccount.user_id],
     );
     user = userResult.rows[0];
   } else {
     const userResult = await query(
-      `INSERT INTO users (phone_number)
-       VALUES ($1)
-       ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number
+      `INSERT INTO users AS u (phone_number, inactivity_enrolled_at)
+       VALUES ($1, CASE WHEN $2 THEN clock_timestamp() ELSE NULL END)
+       ON CONFLICT (phone_number) DO UPDATE SET phone_number = EXCLUDED.phone_number WHERE NOT ${inactiveConditionSql}
        RETURNING ${userReturnFields}`,
-      [phoneNumber],
+      [phoneNumber, inactivityEnabled],
     );
     user = userResult.rows[0];
   }
+
+  if (!user) return inactiveRequired(res);
 
   await seedDefaultCategories(user.id);
 
@@ -1307,7 +1517,7 @@ app.post('/telegram/contact', botInternalRequired, async (req, res) => {
     [user.id, telegramUserId, telegramChatId, phoneNumber, username, firstName],
   );
 
-  const code = await createOtp(phoneNumber);
+  const code = await createOtp(phoneNumber, user.id);
   res.status(existingTelegramAccount ? 200 : 201).json({
     user,
     otp: code,
@@ -1364,7 +1574,7 @@ app.post('/telegram/transactions', botInternalRequired, async (req, res) => {
   if (!user) return;
 
   const result = await createTransactionForUser(user.id, req.body);
-  if (result.error) return res.status(400).json({ error: result.error });
+  if (result.error) return res.status(result.status || 400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
   res.status(201).json(result);
 });
 
@@ -2120,7 +2330,7 @@ app.get('/transactions', authRequired, webFeatureRequired, validTransactionDateF
 
 app.post('/transactions', authRequired, webFeatureRequired, async (req, res) => {
   const result = await createTransactionForUser(req.user.id, req.body);
-  if (result.error) return res.status(400).json({ error: result.error });
+  if (result.error) return res.status(result.status || 400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
   res.status(201).json(result);
 });
 
@@ -2182,15 +2392,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.warn('Production secret validation is inactive; set NODE_ENV=production or COOKIE_SECURE=true for production.');
   }
   ensureDatabaseSchema()
+  .then(() => ensureInactivitySchema(pool))
+  .then(() => inactivityEnabled ? inactivityService.resetPollingHealth() : undefined)
   .then(() => {
     app.listen(port, () => {
       console.log(`Budgetin API listening on ${port}`);
     });
     processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
+    runInactivityWorker();
     cleanupRefreshTokens().catch((error) => console.error('Refresh token cleanup failed:', error.message));
     setInterval(() => {
       processDueAccountDeletionRequests().catch((error) => console.error('Deletion worker failed:', error.message));
     }, 60_000);
+    setInterval(runInactivityWorker, 60_000);
     setInterval(() => {
       cleanupRefreshTokens().catch((error) => console.error('Refresh token cleanup failed:', error.message));
     }, 60 * 60 * 1000);

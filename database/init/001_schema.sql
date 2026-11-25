@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS users (
   blocked_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,
   delete_recovery_until TIMESTAMPTZ,
+  inactivity_enrolled_at TIMESTAMPTZ,
+  last_transaction_activity_at TIMESTAMPTZ,
   verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS telegram_accounts (
 
 CREATE TABLE IF NOT EXISTS otp_codes (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   phone_number TEXT NOT NULL,
   code_hash TEXT NOT NULL,
   purpose TEXT NOT NULL DEFAULT 'login',

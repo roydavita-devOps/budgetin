@@ -57,3 +57,7 @@ jobs:
         run: node backend/test/integration-run.mjs
       - name: Test deletion consistency and calendar validation
         run: node backend/test/qa-p0-sidecar.mjs
+      - name: Test inactivity service with temporary PostgreSQL
+        run: node backend/test/inactivity-integration.mjs
+      - name: Test inactivity API in isolated environment
+        run: node backend/test/inactivity-api.test.mjs
