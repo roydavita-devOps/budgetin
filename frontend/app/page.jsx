@@ -1202,7 +1202,7 @@ export default function Home() {
                   </label>
                   <label className="grid gap-1" htmlFor="history-category">
                     <span className="text-sm font-medium">Kategori</span>
-                    <select id="history-category" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
+                    <select id="history-category" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value, subcategory: '' })}>
                       <option value="">Semua kategori</option>
                       {(filters.type ? categories[filters.type] : allCategories).map((category) => (
                         <option key={category.code} value={category.code}>{category.label}</option>
@@ -1219,6 +1219,16 @@ export default function Home() {
                     </select>
                   </label>
                 </div>
+                {filters.subcategory && (
+                  <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Filter sub-kategori aktif">
+                    <p className="muted-text text-sm [overflow-wrap:anywhere]">
+                      Sub-kategori: {filters.subcategory === '__default__' ? 'Tanpa sub-kategori' : filters.subcategory}
+                    </p>
+                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={() => { setFilters({ ...filters, subcategory: '' }); document.getElementById('history-category')?.focus(); }}>
+                      Hapus filter sub-kategori
+                    </button>
+                  </div>
+                )}
                 {isBulkSelectMode ? (
                   <div className="surface-soft mt-4 flex flex-col gap-3 rounded-[20px] p-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
