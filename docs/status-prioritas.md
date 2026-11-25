@@ -44,6 +44,7 @@ Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kem
 
 ## Lanjutan 25 November 2026
 
+- Backend, frontend, dan bot perubahan lanjutan telah dijalankan melalui Compose. Pemeriksaan awal halaman publik dan health API/database mengembalikan HTTP 200, serta log startup bot normal. Pengujian OTP, penghapusan nyata, tampilan visual, dan alur pengguna melalui browser belum dikonfirmasi.
 - Konfirmasi penonaktifan akun serta keputusan admin untuk penghapusan memakai transaksi database dan penguncian permintaan; pembuatan permintaan juga diserialkan per akun. Penghapusan seluruh transaksi ditolak ketika akun sedang nonaktif atau diblokir. Pengujian sintetis memeriksa rollback dan permintaan bersamaan, termasuk kegagalan saat menghapus seluruh transaksi dan masa recovery.
 - Pemulihan melalui admin hanya dapat dilakukan sebelum tenggat yang tersimpan; perintah verifikasi dan blokir tidak dapat digunakan untuk mengubah akun nonaktif. Akun lama tanpa tenggat tidak dapat dipulihkan melalui perintah biasa dan memerlukan penanganan operator.
 - Filter tanggal pada daftar, ringkasan Telegram, dan ekspor menolak tanggal kalender atau rentang yang tidak valid. Pengujian mencakup hari kabisat dan batas WIB.
