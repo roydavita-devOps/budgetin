@@ -60,6 +60,12 @@ Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kem
 - Perubahan telah dipasang pada layanan online. Pemilik melaporkan telah melakukan pengujian transaksi setelah deployment; rincian hasilnya tidak dicatat di sini. Docker kemudian dimatikan oleh pemilik, sehingga status runtime perlu diperiksa kembali saat layanan dijalankan.
 - Pekerjaan penonaktifan otomatis masih terpisah pada cabang `wip/inactivity-lifecycle` dan belum diterapkan sebagai bagian dari perubahan ini.
 
+## Pembaruan Otomatis Dashboard
+
+- Dashboard memeriksa ulang transaksi 20 detik setelah pemeriksaan sebelumnya selesai saat tab terlihat, dan saat tab kembali terlihat. Jeda diperpanjang bila terjadi kegagalan. Pembaruan dijeda selama edit, pemilihan massal, atau penghapusan satuan berlangsung.
+- Jika pembaruan gagal, data terakhir tetap terlihat dengan peringatan dan tombol coba lagi. Respons lama dibatalkan saat sesi atau periode berubah; respons refresh sesi yang terlambat tidak boleh memulihkan state setelah logout.
+- Pemeriksaan memuat ulang halaman transaksi yang sesuai dan seluruh riwayat, sehingga beban bertambah pada akun besar. Pagination berbasis offset belum merupakan snapshot atomik; perubahan bersamaan saat pembacaan masih berpotensi menghasilkan data sementara yang tidak konsisten. Pertimbangkan revisi per akun dan agregasi server bila penggunaan bertambah.
+
 ## Pengalaman Pengguna Berikutnya
 
 - Kegagalan memuat sub-kategori ditampilkan dengan opsi mencoba ulang; data antar-sesi dipisahkan dan perubahan yang memerlukan daftar sub-kategori ditangguhkan sampai daftar tersedia.

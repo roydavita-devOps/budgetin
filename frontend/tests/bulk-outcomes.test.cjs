@@ -71,6 +71,7 @@ function setupSingle(error) {
     setTransactions: () => {},
     setMonthlyTrendTransactions: () => {},
     setDataVersion: (fn) => { state.version = fn(state.version); },
+    setIsTransactionMutationPending: () => {},
     cancelEditTransaction: () => { state.closed = true; },
   });
   vm.runInContext(`${source.slice(start, end)}\nthis.handlers = { saveTransactionEdit, deleteTransaction };`, context);

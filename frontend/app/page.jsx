@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { startTransactionRefresh } from './lib/transaction-refresh.mjs';
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || '/api';
 const storageKey = 'budgetin_session';
@@ -270,6 +271,7 @@ export default function Home() {
   const [editingTransaction, setEditingTransaction] = useState(null);
   const [editForm, setEditForm] = useState({ type: 'expense', amount: '', category: '', subcategory: '', note: '' });
   const [isBulkSelectMode, setIsBulkSelectMode] = useState(false);
+  const [isTransactionMutationPending, setIsTransactionMutationPending] = useState(false);
   const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
   const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
   const [bulkEditForm, setBulkEditForm] = useState({ category: '', subcategory: '' });
@@ -285,6 +287,8 @@ export default function Home() {
   const [isSubcategoryTransactionsModalOpen, setIsSubcategoryTransactionsModalOpen] = useState(false);
   const [subcategoryTransactionsPage, setSubcategoryTransactionsPage] = useState(1);
   const refreshPromiseRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
+  const transactionRefreshRef = useRef(null);
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
   const dashboardOwner = user?.display_name || user?.phone_number || 'Budgetin';
   const isDeleted = Boolean(token && user?.is_deleted);
@@ -370,6 +374,8 @@ export default function Home() {
   const modalCategoryList = customCategoryGroups.get(`${categoryForm.type}:${categoryForm.parent_category}`) || [];
 
   async function clearSession(message = 'Session berakhir. Silakan login ulang.') {
+    sessionGenerationRef.current += 1;
+    refreshPromiseRef.current = null;
     sessionStorage.removeItem(storageKey);
     setToken('');
     setUser(null);
@@ -383,34 +389,42 @@ export default function Home() {
       return refreshPromiseRef.current;
     }
 
-    refreshPromiseRef.current = (async () => {
-      try {
-        const response = await fetch(`${apiUrl}/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(body.error || 'Refresh gagal');
+    const generation = sessionGenerationRef.current;
+    const refresh = (async () => {
+      const response = await fetch(`${apiUrl}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (generation !== sessionGenerationRef.current) return null;
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          await clearSession();
+          return null;
         }
-
-        setUser(body.user);
-        setToken(body.token);
-        sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
-        return body;
-      } catch {
-        await clearSession();
+        throw new Error(body.error || 'Refresh gagal');
+      }
+      if (!body.token || !body.user) throw new Error('Respons sesi tidak valid');
+      sessionGenerationRef.current += 1;
+      setUser(body.user);
+      setToken(body.token);
+      sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
+      return body;
+    })();
+    refreshPromiseRef.current = refresh;
+    try {
+      return await refresh;
+    } catch (error) {
+      if (generation !== sessionGenerationRef.current) {
         return null;
-      } finally {
+      }
+      throw error;
+    } finally {
+      if (refreshPromiseRef.current === refresh) {
         refreshPromiseRef.current = null;
       }
-    })();
-
-    return refreshPromiseRef.current;
+    }
   }
 
   async function request(path, options = {}) {
@@ -425,6 +439,7 @@ export default function Home() {
     });
 
     const body = await response.json().catch(() => ({}));
+    if (fetchOptions.signal?.aborted) throw new DOMException('Dibatalkan', 'AbortError');
     const shouldTryRefresh = response.status === 401
       && !skipRefresh
       && token
@@ -473,6 +488,8 @@ export default function Home() {
         method: 'POST',
         body: JSON.stringify({ phone_number: phoneNumber, code: otpCode }),
       });
+      sessionGenerationRef.current += 1;
+      refreshPromiseRef.current = null;
       setUser(body.user);
       setToken(body.token);
       sessionStorage.setItem(storageKey, JSON.stringify({ token: body.token, user: body.user }));
@@ -535,6 +552,7 @@ export default function Home() {
     const confirmed = window.confirm('Hapus transaksi ini?');
     if (!confirmed) return;
 
+    setIsTransactionMutationPending(true);
     try {
       await request(`/transactions/${itemId}`, { method: 'DELETE', headers });
       setTransactions((current) => current.filter((item) => item.id !== itemId));
@@ -543,6 +561,7 @@ export default function Home() {
       window.alert('Hasil penghapusan belum dapat dipastikan. Periksa Riwayat setelah data dimuat ulang sebelum mencoba lagi.');
     } finally {
       setDataVersion((current) => current + 1);
+      setIsTransactionMutationPending(false);
     }
   }
 
@@ -734,6 +753,8 @@ export default function Home() {
   }
 
   async function logout() {
+    sessionGenerationRef.current += 1;
+    refreshPromiseRef.current = null;
     try {
       await fetch(`${apiUrl}/auth/logout`, {
         method: 'POST',
@@ -788,13 +809,19 @@ export default function Home() {
 
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
+    const generation = sessionGenerationRef.current;
 
     request('/me', { headers })
       .then((body) => {
+        if (cancelled || generation !== sessionGenerationRef.current) return;
         setUser(body.user);
         sessionStorage.setItem(storageKey, JSON.stringify({ token, user: body.user }));
       })
-      .catch(() => clearSession());
+      .catch((error) => {
+        if (!cancelled && generation === sessionGenerationRef.current && (error.status === 401 || error.status === 403)) clearSession();
+      });
+    return () => { cancelled = true; };
   }, [token]);
 
   useEffect(() => {
@@ -802,24 +829,32 @@ export default function Home() {
       setDataStatus({ key: '', error: '' });
       return;
     }
-    const controller = new AbortController();
-    const requestPage = (path, signal) => request(path, { headers, signal });
-
-    Promise.all([
-      fetchAllTransactions(requestPage, selectedMonth, controller.signal),
-      fetchAllTransactions(requestPage, '', controller.signal),
-    ]).then(([monthTransactions, allTransactions]) => {
-      if (controller.signal.aborted) return;
-      setTransactions(monthTransactions);
-      setMonthlyTrendTransactions(allTransactions);
-      setDataStatus({ key: dataKey, error: '' });
-    }).catch((error) => {
-      if (controller.signal.aborted) return;
-      controller.abort();
-      setDataStatus({ key: dataKey, error: error.message || 'Gagal memuat transaksi.' });
+    if (editingTransaction || isBulkSelectMode || isTransactionMutationPending) return;
+    const loop = startTransactionRefresh({
+      documentRef: document,
+      run: async (signal) => {
+        const requestPage = (path, pageSignal) => request(path, { headers, signal: pageSignal });
+        const [monthTransactions, allTransactions] = await Promise.all([
+          fetchAllTransactions(requestPage, selectedMonth, signal),
+          fetchAllTransactions(requestPage, '', signal),
+        ]);
+        if (signal.aborted) return;
+        setTransactions(monthTransactions);
+        setMonthlyTrendTransactions(allTransactions);
+        setDataStatus({ key: dataKey, error: '', refreshError: false });
+      },
+      onError: (error) => setDataStatus((current) => (
+        current.key === dataKey && !current.error
+          ? { ...current, refreshError: true }
+          : { key: dataKey, error: error?.message || 'Gagal memuat transaksi.' }
+      )),
     });
-    return () => controller.abort();
-  }, [token, user?.id, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, dataVersion]);
+    transactionRefreshRef.current = loop;
+    return () => {
+      loop.stop();
+      if (transactionRefreshRef.current === loop) transactionRefreshRef.current = null;
+    };
+  }, [token, user?.id, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, dataVersion, editingTransaction?.id, isBulkSelectMode, isTransactionMutationPending]);
 
   useEffect(() => {
     if (!canViewDashboard) return;
@@ -1097,6 +1132,13 @@ export default function Home() {
                   <button className="soft-button mt-3 rounded-xl px-3 py-2 text-sm font-semibold" onClick={() => setDataVersion((current) => current + 1)}>Coba lagi</button>
                 </>
               ) : null}
+            </section>
+          ) : null}
+
+          {canViewDashboard && dataReady && dataStatus.refreshError ? (
+            <section className="surface-card rounded-xl p-4" role="status">
+              <p className="heading-text text-sm">Data mungkin belum terbaru. Periksa koneksi untuk memperbarui transaksi.</p>
+              <button className="soft-button mt-2 rounded-xl px-3 py-2 text-sm font-semibold disabled:opacity-50" onClick={() => transactionRefreshRef.current?.refresh()} disabled={Boolean(editingTransaction || isBulkSelectMode || isTransactionMutationPending)}>Coba lagi</button>
             </section>
           ) : null}
 
