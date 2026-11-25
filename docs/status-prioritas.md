@@ -52,3 +52,17 @@ Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kem
 - Input login dan filter riwayat diberi label, dan kontrol terkait diberi indikator fokus keyboard. Pemeriksaan visual, kontras menyeluruh, urutan Tab, dan pengujian dengan pengguna masih diperlukan.
 - Bot menyampaikan ketika notifikasi admin tidak dapat dikirim; belum tersedia antrian notifikasi persisten atau percobaan ulang otomatis. Pencegahan duplikasi pencatatan Telegram secara menyeluruh juga belum diimplementasikan. Penghapusan beberapa transaksi melalui bot masih bertahap, bukan operasi atomik. Migrasi database berversi dan agregasi/paginasi server juga belum selesai.
 - Worker yang ada tidak menghapus akun atau transaksi secara permanen setelah masa recovery; ia hanya memperbarui status permintaan. Jangan mengaktifkan penghapusan otomatis terhadap data lama tanpa keputusan pemilik, verifikasi dampak, dan rencana terpisah.
+
+## Pembaruan Keandalan Telegram
+
+- Commit `cd2c9b0` menerapkan retry untuk pencatatan yang hasilnya belum pasti dan deduplikasi berdasarkan ID update Telegram. Penanda dan transaksi disimpan secara atomik; update yang sama tidak membuat transaksi baru setelah transaksi sebelumnya dihapus.
+- Pengujian sintetis mencakup respons yang terputus, retry, permintaan bersamaan, rollback, dan isolasi pemilik. Dua pesan terpisah tetap dianggap dua transaksi; konfirmasi Telegram juga dapat terkirim lebih dari sekali ketika respons pengirimannya terputus.
+- Perubahan telah dipasang pada layanan online. Pemilik melaporkan telah melakukan pengujian transaksi setelah deployment; rincian hasilnya tidak dicatat di sini. Docker kemudian dimatikan oleh pemilik, sehingga status runtime perlu diperiksa kembali saat layanan dijalankan.
+- Pekerjaan penonaktifan otomatis masih terpisah pada cabang `wip/inactivity-lifecycle` dan belum diterapkan sebagai bagian dari perubahan ini.
+
+## Pengalaman Pengguna Berikutnya
+
+- Kegagalan memuat sub-kategori ditampilkan dengan opsi mencoba ulang; data antar-sesi dipisahkan dan perubahan yang memerlukan daftar sub-kategori ditangguhkan sampai daftar tersedia.
+- Pesan Telegram membedakan tenggat pemulihan yang masih berlaku, sudah lewat, atau tidak tersedia. Pesan web mengarahkan pengguna ke kontak admin tanpa menjanjikan pemulihan setelah tenggat.
+- Edit dan hapus transaksi memuat ulang data ketika hasil permintaan belum pasti. Untuk operasi massal, jumlah respons yang berhasil dibedakan dari hasil yang belum dapat dipastikan; pengguna diminta memeriksa Riwayat sebelum mencoba lagi.
+- Perubahan ini diuji dengan mock dan data sintetis tanpa Docker. Browser diperiksa pada login dan Riwayat, termasuk ukuran desktop/ponsel, dark/light, retry sub-kategori, dan respons hapus massal yang terputus. Pemeriksaan seluruh halaman, akses keyboard menyeluruh, serta pengujian dengan pengguna masih diperlukan; perubahan ini belum diterapkan pada layanan online.

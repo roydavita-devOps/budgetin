@@ -246,6 +246,10 @@ function busyDayInsight(transactions) {
   return top ? `Hari paling boros: ${top[0]} (${formatCurrency(top[1])}).` : 'Belum ada pola harian yang bisa dibaca.';
 }
 
+function categoriesForSession(data, key, ready) {
+  return ready && data.key === key ? data.items : [];
+}
+
 export default function Home() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -269,7 +273,9 @@ export default function Home() {
   const [selectedTransactionIds, setSelectedTransactionIds] = useState([]);
   const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
   const [bulkEditForm, setBulkEditForm] = useState({ category: '', subcategory: '' });
-  const [customCategories, setCustomCategories] = useState([]);
+  const [categoryData, setCategoryData] = useState({ key: '', items: [] });
+  const [categoryVersion, setCategoryVersion] = useState(0);
+  const [categoryStatus, setCategoryStatus] = useState({ key: '', error: '' });
   const [categoryForm, setCategoryForm] = useState({ type: 'expense', parent_category: 'food_drink', name: '' });
   const [categoryMessage, setCategoryMessage] = useState('');
   const [subcategoryView, setSubcategoryView] = useState({ type: 'expense', category: 'food_drink' });
@@ -288,6 +294,18 @@ export default function Home() {
   const dataKey = JSON.stringify([token, user?.id, selectedMonth, dataVersion]);
   const dataReady = dataStatus.key === dataKey && !dataStatus.error;
   const dataError = dataStatus.key === dataKey ? dataStatus.error : '';
+  const categoryKey = JSON.stringify([token, user?.id, categoryVersion]);
+  const categoriesReady = categoryStatus.key === categoryKey && !categoryStatus.error;
+  const categoriesError = categoryStatus.key === categoryKey ? categoryStatus.error : '';
+  const retryCategories = () => setCategoryVersion((current) => current + 1);
+  const categorySessionKey = JSON.stringify([token, user?.id]);
+  const customCategories = categoriesForSession(categoryData, categorySessionKey, canViewDashboard && categoriesReady);
+
+  function updateCustomCategories(update) {
+    setCategoryData((current) => current.key === categorySessionKey
+      ? { ...current, items: update(current.items) }
+      : current);
+  }
 
   const filteredTransactions = useMemo(() => filterHistory(transactions, filters), [transactions, filters]);
 
@@ -429,6 +447,7 @@ export default function Home() {
     if (!response.ok) {
       const error = new Error(body.error || 'Request failed');
       error.code = body.code;
+      error.status = response.status;
       throw error;
     }
     return body;
@@ -463,16 +482,6 @@ export default function Home() {
     }
   }
 
-  async function loadCategories() {
-    if (!token || !user?.is_verified || user?.is_blocked || user?.is_deleted) {
-      setCustomCategories([]);
-      return;
-    }
-
-    const body = await request('/categories', { headers });
-    setCustomCategories(body.custom || []);
-  }
-
   function startEditTransaction(item) {
     setEditingTransaction(item);
     setEditForm({
@@ -490,22 +499,35 @@ export default function Home() {
   }
 
   async function saveTransactionEdit() {
-    if (!editingTransaction) return;
-    const body = await request(`/transactions/${editingTransaction.id}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({
-        type: editForm.type,
-        amount: Number(editForm.amount),
-        category: editForm.category,
-        subcategory: editForm.subcategory,
-        note: editForm.note,
-      }),
-    });
-    setTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
-    setMonthlyTrendTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
-    setDataVersion((current) => current + 1);
-    cancelEditTransaction();
+    if (!editingTransaction || !categoriesReady) return;
+    let shouldReload = true;
+    try {
+      const body = await request(`/transactions/${editingTransaction.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          type: editForm.type,
+          amount: Number(editForm.amount),
+          category: editForm.category,
+          subcategory: editForm.subcategory,
+          note: editForm.note,
+        }),
+      });
+      setTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
+      setMonthlyTrendTransactions((current) => current.map((item) => (item.id === editingTransaction.id ? body.data : item)));
+    } catch (error) {
+      if ([400, 422].includes(error.status)) {
+        shouldReload = false;
+        window.alert(error.message || 'Periksa kembali data transaksi.');
+      } else {
+        window.alert('Hasil perubahan belum dapat dipastikan. Periksa Riwayat setelah data dimuat ulang sebelum mencoba lagi.');
+      }
+    } finally {
+      if (shouldReload) {
+        setDataVersion((current) => current + 1);
+        cancelEditTransaction();
+      }
+    }
   }
 
   async function deleteTransaction(itemId) {
@@ -513,13 +535,15 @@ export default function Home() {
     const confirmed = window.confirm('Hapus transaksi ini?');
     if (!confirmed) return;
 
-    await request(`/transactions/${itemId}`, {
-      method: 'DELETE',
-      headers,
-    });
-    setTransactions((current) => current.filter((item) => item.id !== itemId));
-    setMonthlyTrendTransactions((current) => current.filter((item) => item.id !== itemId));
-    setDataVersion((current) => current + 1);
+    try {
+      await request(`/transactions/${itemId}`, { method: 'DELETE', headers });
+      setTransactions((current) => current.filter((item) => item.id !== itemId));
+      setMonthlyTrendTransactions((current) => current.filter((item) => item.id !== itemId));
+    } catch {
+      window.alert('Hasil penghapusan belum dapat dipastikan. Periksa Riwayat setelah data dimuat ulang sebelum mencoba lagi.');
+    } finally {
+      setDataVersion((current) => current + 1);
+    }
   }
 
   function toggleBulkSelectMode() {
@@ -563,7 +587,7 @@ export default function Home() {
   }
 
   async function saveBulkTransactionEdit() {
-    if (!selectedTransactions.length || !selectedTransactionType) return;
+    if (!categoriesReady || !selectedTransactions.length || !selectedTransactionType) return;
 
     const updates = await Promise.allSettled(
       selectedTransactions.map((item) => request(`/transactions/${item.id}`, {
@@ -591,14 +615,12 @@ export default function Home() {
 
     setTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
     setMonthlyTrendTransactions((current) => current.map((item) => updatedById.get(item.id) || item));
-    if (updatedById.size > 0) {
-      setDataVersion((current) => current + 1);
-      setSelectedTransactionIds([]);
-      setIsBulkSelectMode(false);
-      closeBulkEditModal();
-    }
+    setDataVersion((current) => current + 1);
+    setSelectedTransactionIds([]);
+    setIsBulkSelectMode(false);
+    closeBulkEditModal();
     if (failedCount > 0) {
-      window.alert(`${failedCount} transaksi gagal diperbarui. Sisanya berhasil.`);
+      window.alert(`${updatedById.size} transaksi dipastikan diperbarui. Hasil ${failedCount} transaksi lainnya belum dapat dipastikan. Periksa Riwayat setelah data dimuat ulang sebelum mencoba lagi.`);
     }
   }
 
@@ -626,15 +648,16 @@ export default function Home() {
 
     setTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
     setMonthlyTrendTransactions((current) => current.filter((item) => !deletedIds.has(item.id)));
-    if (deletedIds.size) setDataVersion((current) => current + 1);
+    setDataVersion((current) => current + 1);
     setSelectedTransactionIds([]);
     setIsBulkSelectMode(false);
     if (failedCount > 0) {
-      window.alert(`${failedCount} transaksi gagal dihapus. Sisanya berhasil.`);
+      window.alert(`${deletedIds.size} transaksi dipastikan dihapus. Hasil ${failedCount} transaksi lainnya belum dapat dipastikan. Periksa Riwayat setelah data dimuat ulang sebelum mencoba lagi.`);
     }
   }
 
   async function createCustomCategory() {
+    if (!categoriesReady) return;
     try {
       setCategoryMessage('');
       const body = await request('/categories', {
@@ -642,7 +665,7 @@ export default function Home() {
         headers,
         body: JSON.stringify(categoryForm),
       });
-      setCustomCategories((current) => [...current, body.data].sort((a, b) => a.name.localeCompare(b.name, 'id-ID')));
+      updateCustomCategories((current) => [...current, body.data].sort((a, b) => a.name.localeCompare(b.name, 'id-ID')));
       setCategoryForm((current) => ({ ...current, name: '' }));
       setCategoryMessage('Sub-kategori berhasil ditambahkan.');
     } catch (error) {
@@ -651,6 +674,7 @@ export default function Home() {
   }
 
   async function removeCustomCategory(categoryId) {
+    if (!categoriesReady) return;
     const confirmed = window.confirm('Hapus sub-kategori ini? Transaksi lama yang masih memakainya akan menolak penghapusan.');
     if (!confirmed) return;
     const removed = customCategories.find((item) => item.id === categoryId);
@@ -660,7 +684,7 @@ export default function Home() {
         method: 'DELETE',
         headers,
       });
-      setCustomCategories((current) => current.filter((item) => item.id !== categoryId));
+      updateCustomCategories((current) => current.filter((item) => item.id !== categoryId));
       setCategoryMessage('Sub-kategori berhasil dihapus.');
       setEditForm((current) => {
         const shouldClear = removed
@@ -798,8 +822,21 @@ export default function Home() {
   }, [token, user?.id, user?.is_verified, user?.is_blocked, user?.is_deleted, selectedMonth, dataVersion]);
 
   useEffect(() => {
-    loadCategories().catch(console.error);
-  }, [token, user?.is_verified, user?.is_blocked, user?.is_deleted]);
+    if (!canViewDashboard) return;
+    const controller = new AbortController();
+    request('/categories', { headers, signal: controller.signal })
+      .then((body) => {
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(body.custom)) throw new Error('Respons sub-kategori tidak valid.');
+        setCategoryData({ key: categorySessionKey, items: body.custom });
+        setCategoryStatus({ key: categoryKey, error: '' });
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setCategoryStatus({ key: categoryKey, error: error.message || 'Gagal memuat sub-kategori.' });
+      });
+    return () => controller.abort();
+  }, [token, user?.id, user?.is_verified, user?.is_blocked, user?.is_deleted, categoryVersion]);
 
   useEffect(() => {
     if (!isBulkSelectMode) return;
@@ -962,7 +999,7 @@ export default function Home() {
           </aside>
         ) : null}
 
-        <div className="flex-1 space-y-6">
+        <div className="min-w-0 flex-1 space-y-6">
           <header className="surface-card rounded-[24px] p-5 sm:p-6">
             <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
               <div className="space-y-2">
@@ -1040,8 +1077,8 @@ export default function Home() {
 
           {isDeleted && (
             <StatusPanel title="Akun dinonaktifkan" tone="danger">
-              Akun Budgetin kamu sedang dinonaktifkan. Hubungi admin jika ingin recovery.
-              {user?.delete_recovery_until ? ` Recovery tersedia sampai ${formatDateTimeWib(user.delete_recovery_until)}.` : ''}
+              Akun Budgetin kamu sedang dinonaktifkan. Untuk menanyakan pemulihan, buka bot Telegram Budgetin dan ketik /tentang untuk melihat kontak admin.
+              {user?.delete_recovery_until ? ` Tenggat pemulihan tercatat: ${formatDateTimeWib(user.delete_recovery_until)}.` : ''}
             </StatusPanel>
           )}
 
@@ -1214,6 +1251,7 @@ export default function Home() {
                       <label className="flex items-center justify-center">
                         <input
                           type="checkbox"
+                          aria-label={`Pilih transaksi ${item.category_label || item.category}, ${formatCurrency(item.amount)}, ${formatDateTimeWib(item.created_at)}`}
                           className="h-4 w-4 accent-[var(--primary)]"
                           checked={selectedTransactionIds.includes(item.id)}
                           onChange={() => toggleTransactionSelection(item.id)}
@@ -1251,7 +1289,7 @@ export default function Home() {
                   </div>
                 ))}
                 {!filteredTransactions.length && (
-                  <p className="muted-text rounded-2xl px-4 py-5 text-sm">{token ? 'Belum ada transaksi pada filter ini.' : 'Login untuk mulai.'}</p>
+                  <p className="muted-text rounded-2xl px-4 py-5 text-sm">{transactions.length ? 'Tidak ada transaksi yang cocok dengan filter ini.' : 'Belum ada transaksi pada periode ini.'}</p>
                 )}
               </div>
             </section>
@@ -1266,13 +1304,13 @@ export default function Home() {
                 </div>
                 <div className="mt-6 grid gap-5">
                   <div className="grid gap-4 md:grid-cols-3">
-                    <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={exportFilters.month} onChange={(event) => setExportFilters({ ...exportFilters, month: event.target.value })} />
-                    <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={exportFilters.type} onChange={(event) => setExportFilters({ ...exportFilters, type: event.target.value, category: '' })}>
+                    <input aria-label="Bulan export" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={exportFilters.month} onChange={(event) => setExportFilters({ ...exportFilters, month: event.target.value })} />
+                    <select aria-label="Tipe export" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={exportFilters.type} onChange={(event) => setExportFilters({ ...exportFilters, type: event.target.value, category: '' })}>
                       <option value="">Semua tipe</option>
                       <option value="income">Pemasukan</option>
                       <option value="expense">Pengeluaran</option>
                     </select>
-                    <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={exportFilters.category} onChange={(event) => setExportFilters({ ...exportFilters, category: event.target.value })}>
+                    <select aria-label="Kategori export" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={exportFilters.category} onChange={(event) => setExportFilters({ ...exportFilters, category: event.target.value })}>
                       <option value="">Semua kategori</option>
                       {(exportFilters.type ? categories[exportFilters.type] : allCategories).map((category) => (
                         <option key={category.code} value={category.code}>{category.label}</option>
@@ -1285,7 +1323,7 @@ export default function Home() {
                     <SummaryTile label="3. Kategori" value={exportFilters.category ? (allCategories.find((category) => category.code === exportFilters.category)?.label || exportFilters.category) : 'Semua kategori'} />
                   </div>
                   <div className="flex justify-start">
-                    <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50" onClick={exportCsv} disabled={!token}>Export CSV</button>
+                    <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md disabled:opacity-50" onClick={() => exportCsv().catch(() => window.alert('Export gagal. Periksa koneksi dan coba lagi.'))} disabled={!token}>Export CSV</button>
                   </div>
                 </div>
               </div>
@@ -1317,28 +1355,29 @@ export default function Home() {
               </div>
               <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold" onClick={cancelEditTransaction}>Tutup</button>
             </div>
+            <CategoryLoadStatus ready={categoriesReady} error={categoriesError} onRetry={retryCategories} />
             <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code, subcategory: '' })}>
+              <select aria-label="Tipe transaksi" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.type} onChange={(event) => setEditForm({ ...editForm, type: event.target.value, category: categories[event.target.value][0].code, subcategory: '' })}>
                 <option value="income">Pemasukan</option>
                 <option value="expense">Pengeluaran</option>
               </select>
-              <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
-              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value, subcategory: '' })}>
+              <input aria-label="Nominal" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="number" min="1" value={editForm.amount} onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })} placeholder="Nominal" />
+              <select aria-label="Kategori transaksi" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.category} onChange={(event) => setEditForm({ ...editForm, category: event.target.value, subcategory: '' })}>
                 {categories[editForm.type].map((category) => (
                   <option key={category.code} value={category.code}>{category.label}</option>
                 ))}
               </select>
-              <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
+              <select aria-label="Sub-kategori transaksi" disabled={!categoriesReady} className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={editForm.subcategory} onChange={(event) => setEditForm({ ...editForm, subcategory: event.target.value })}>
                 <option value="">Tanpa sub-kategori</option>
                 {editSubcategoryOptions.map((subcategory) => (
                   <option key={subcategory.id} value={subcategory.name}>{subcategory.name}</option>
                 ))}
               </select>
-              <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md md:col-span-2" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
+              <input aria-label="Catatan" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md md:col-span-2" value={editForm.note} onChange={(event) => setEditForm({ ...editForm, note: event.target.value })} placeholder="Catatan" />
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button className="soft-button rounded-2xl px-4 py-3 text-sm font-semibold" onClick={cancelEditTransaction}>Batal</button>
-              <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={saveTransactionEdit}>Simpan perubahan</button>
+              <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold disabled:opacity-50" onClick={saveTransactionEdit} disabled={!categoriesReady}>Simpan perubahan</button>
             </div>
           </div>
         </div>
@@ -1366,8 +1405,10 @@ export default function Home() {
               </p>
             </div>
 
+            <CategoryLoadStatus ready={categoriesReady} error={categoriesError} onRetry={retryCategories} />
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <select
+                aria-label="Kategori transaksi terpilih"
                 className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
                 value={bulkEditForm.category}
                 onChange={(event) => setBulkEditForm({ category: event.target.value, subcategory: '' })}
@@ -1377,6 +1418,8 @@ export default function Home() {
                 )) : null}
               </select>
               <select
+                aria-label="Sub-kategori transaksi terpilih"
+                disabled={!categoriesReady}
                 className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
                 value={bulkEditForm.subcategory}
                 onChange={(event) => setBulkEditForm({ ...bulkEditForm, subcategory: event.target.value })}
@@ -1393,6 +1436,7 @@ export default function Home() {
               <button
                 className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md"
                 onClick={saveBulkTransactionEdit}
+                disabled={!categoriesReady}
               >
                 Simpan perubahan
               </button>
@@ -1583,8 +1627,10 @@ export default function Home() {
 
             <div className="grid max-h-[calc(90vh-88px)] gap-6 overflow-y-auto p-6 sm:p-8 xl:grid-cols-[0.95fr_1.05fr]">
               <div className="grid gap-4">
+                <CategoryLoadStatus ready={categoriesReady} error={categoriesError} onRetry={retryCategories} />
                 <div className="grid gap-4 md:grid-cols-3">
                   <select
+                    aria-label="Tipe sub-kategori"
                     className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
                     value={categoryForm.type}
                     onChange={(event) => {
@@ -1597,6 +1643,7 @@ export default function Home() {
                     <option value="income">Pemasukan</option>
                   </select>
                   <select
+                    aria-label="Kategori utama sub-kategori"
                     className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md"
                     value={categoryForm.parent_category}
                     onChange={(event) => setCategoryForm({ ...categoryForm, parent_category: event.target.value })}
@@ -1606,6 +1653,7 @@ export default function Home() {
                     ))}
                   </select>
                   <input
+                    aria-label="Nama sub-kategori"
                     className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
                     value={categoryForm.name}
                     onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
@@ -1615,7 +1663,7 @@ export default function Home() {
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="muted-text text-sm">Maksimal 10 sub-kategori per kategori utama.</p>
-                  <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={createCustomCategory}>Tambah sub-kategori</button>
+                  <button className="brand-button rounded-2xl px-4 py-3 text-sm font-semibold disabled:opacity-50" onClick={createCustomCategory} disabled={!categoriesReady}>Tambah sub-kategori</button>
                 </div>
                 <p className="muted-text text-sm">{categoryMessage}</p>
               </div>
@@ -1628,11 +1676,11 @@ export default function Home() {
                     </h3>
                     <p className="muted-text mt-1 text-sm">Sub-kategori yang sudah dipakai transaksi lama tidak bisa dihapus.</p>
                   </div>
-                  <span className="muted-text text-sm">{modalCategoryList.length}/10</span>
+                  {categoriesReady && <span className="muted-text text-sm">{modalCategoryList.length}/10</span>}
                 </div>
 
                 <div className="grid gap-3">
-                  {modalCategoryList.length ? modalCategoryList.map((item) => (
+                  {categoriesReady && (modalCategoryList.length ? modalCategoryList.map((item) => (
                     <div key={item.id} className="surface-soft flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
                       <div>
                         <p className="heading-text text-sm font-semibold">{item.name}</p>
@@ -1644,7 +1692,7 @@ export default function Home() {
                     <div className="surface-soft rounded-2xl p-5">
                       <p className="muted-text text-sm">Belum ada sub-kategori custom untuk kategori ini.</p>
                     </div>
-                  )}
+                  ))}
                 </div>
               </div>
             </div>
@@ -1652,6 +1700,16 @@ export default function Home() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function CategoryLoadStatus({ ready, error, onRetry }) {
+  if (ready) return null;
+  return (
+    <div className="mt-4" role={error ? 'alert' : 'status'}>
+      <p className="muted-text text-sm">{error ? 'Sub-kategori gagal dimuat. Perubahan yang memerlukan sub-kategori ditangguhkan.' : 'Memuat sub-kategori...'}</p>
+      {error && <button className="soft-button mt-2 rounded-xl px-3 py-2 text-sm font-semibold" onClick={onRetry}>Coba lagi</button>}
+    </div>
   );
 }
 

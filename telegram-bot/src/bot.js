@@ -439,17 +439,13 @@ async function sendStartMessage(message) {
 }
 
 function sendDeletedAccountMessage(chatId, account, extra = {}) {
-  const recoveryText = account?.delete_recovery_until
-    ? `Admin masih bisa recovery sampai ${formatDateTime(account.delete_recovery_until)}.`
-    : 'Hubungi admin Budgetin jika ingin recovery.';
-
   return sendMessage(
     chatId,
     [
       'Akun Budgetin kamu sedang dinonaktifkan.',
       '',
-      recoveryText,
-      'Selama status ini aktif, Telegram dan dashboard web tidak bisa dipakai.',
+      accountRecoveryMessage(account?.delete_recovery_until),
+      'Selama status ini aktif, perintah transaksi dan pengaturan akun tidak bisa dipakai.',
       'Ketik /tentang untuk melihat kontak admin. Jangan kirim kode OTP kepada siapa pun.',
     ].join('\n'),
     extra,
@@ -496,6 +492,8 @@ function sendHelpMessage(chatId, account = null) {
       'Budgetin siap.',
       '',
       'Pilih yang kamu butuhkan:',
+      'Perintah transaksi dan pengaturan akun memerlukan akun yang terhubung dan aktif. Ketik /mulai untuk menghubungkan akun.',
+      'Export memerlukan verifikasi admin. Untuk bantuan, ketik /tentang.',
       '',
       '/catat',
       'Untuk catat pengeluaran atau pemasukan.',
@@ -690,7 +688,7 @@ function sendAccountHelp(chatId) {
       'Ajukan permintaan hapus semua transaksi ke admin.',
       '',
       '/hapus_akun',
-      'Nonaktifkan akun sekarang. Admin masih bisa recovery maksimal 2 hari.',
+      'Buat permintaan penonaktifan akun. Akun dinonaktifkan setelah konfirmasi.',
       '',
       'Catatan:',
       'Kode hapus akun akan diberikan setelah kamu mengetik /hapus_akun.',
@@ -794,21 +792,27 @@ async function handleContact(message) {
       [
         'Nomor Telegram sudah terhubung.',
         `Kode OTP Budgetin kamu: ${body.otp}`,
-        'Kode berlaku 10 menit. Masukkan kode ini di halaman login web.',
+        'Kode berlaku 10 menit. Masukkan kode ini hanya di halaman login web Budgetin.',
         'Jangan bagikan kode OTP kepada siapa pun.',
         '',
-        'Kamu bisa mulai catat transaksi dari Telegram:',
-        '/makan nasi padang 18000',
-        '/gaji april 7000000',
-        '',
-        'Ketik /bantuan untuk melihat menu lengkap.',
-        '',
-        'Dashboard web:',
-        webAppUrl,
-        '',
-        body.user.is_verified
-          ? 'Dashboard lengkap sudah aktif.'
-          : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
+        ...(body.user.is_deleted || body.user.is_blocked ? [
+          body.user.is_deleted ? 'Akun kamu sedang dinonaktifkan.' : 'Akun kamu diblokir.',
+          'Perintah transaksi dan pengaturan akun tidak bisa dipakai selama status ini aktif.',
+          'Ketik /tentang untuk melihat kontak admin.',
+        ] : [
+          'Kamu bisa mulai catat transaksi dari Telegram:',
+          '/makan nasi padang 18000',
+          '/gaji april 7000000',
+          '',
+          'Ketik /bantuan untuk melihat menu lengkap.',
+          '',
+          'Dashboard web:',
+          webAppUrl,
+          '',
+          body.user.is_verified
+            ? 'Dashboard lengkap sudah aktif.'
+            : 'Dashboard lengkap akan aktif setelah admin memverifikasi akun kamu.',
+        ]),
       ].join('\n'),
       { reply_markup: { remove_keyboard: true } },
     );
@@ -1105,9 +1109,9 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
       'Data kamu belum dihapus.',
       '',
       'Kalau command di bawah ini dikirim, akun langsung dinonaktifkan.',
-      'Telegram dan dashboard web tidak bisa dipakai setelah itu.',
+      'Perintah transaksi dan pengaturan akun tidak bisa dipakai setelah itu.',
       '',
-      'Bot akan mencoba memberi tahu admin. Akun masih bisa dipulihkan maksimal 2 hari.',
+      'Bot akan mencoba memberi tahu admin. Admin dapat memulihkan akun dalam batas waktu 2 hari setelah penonaktifan.',
       'Lanjutkan hanya jika kamu sadar dan yakin.',
       '',
       'Copy command ini untuk konfirmasi:',
@@ -1163,9 +1167,9 @@ async function updateAccountDeletionRequest(message, text, action) {
         'Kode request:',
         body.request.request_code,
         '',
-        `Admin masih bisa recovery sampai ${formatDateTime(body.user.delete_recovery_until)}.`,
+        accountRecoveryMessage(body.user.delete_recovery_until),
         notified ? 'Notifikasi dikirim ke admin.' : 'Notifikasi ke admin belum terkirim. Hubungi admin melalui /tentang.',
-        'Jika ini tidak sengaja, segera hubungi admin Budgetin.',
+        'Ketik /tentang untuk melihat kontak admin.',
       ].join('\n'),
     );
   } catch (error) {
@@ -1201,7 +1205,8 @@ async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramPr
   const telegramUserId = telegramProfile?.telegram_user_id || '-';
   const username = telegramProfile?.username ? `@${telegramProfile.username}` : '-';
   const firstName = telegramProfile?.first_name || '-';
-  const recoveryUntil = user?.delete_recovery_until ? formatDateTime(user.delete_recovery_until) : '-';
+  const recoveryDate = user?.delete_recovery_until ? new Date(user.delete_recovery_until) : null;
+  const recoveryUntil = recoveryDate && Number.isFinite(recoveryDate.getTime()) ? formatDateTime(recoveryDate) : '-';
   const text = [
     'User menonaktifkan akun Budgetin.',
     '',
@@ -2078,6 +2083,20 @@ function formatDateTime(value) {
     timeStyle: 'short',
     timeZone: 'Asia/Jakarta',
   }).format(new Date(value));
+}
+
+function accountRecoveryMessage(value) {
+  const deadline = value ? new Date(value) : null;
+  if (!deadline || !Number.isFinite(deadline.getTime())) {
+    return 'Batas waktu pemulihan tidak tersedia. Hubungi admin untuk informasi lebih lanjut.';
+  }
+
+  const formatted = `${new Intl.DateTimeFormat('id-ID', {
+    dateStyle: 'medium', timeStyle: 'medium', timeZone: 'Asia/Jakarta',
+  }).format(deadline)} WIB`;
+  return deadline.getTime() > Date.now()
+    ? `Batas waktu pemulihan oleh admin: ${formatted}. Hubungi admin sebelum batas tersebut untuk meminta pemulihan.`
+    : `Batas waktu pemulihan oleh admin (${formatted}) sudah berakhir. Hubungi admin untuk informasi lebih lanjut.`;
 }
 
 function currentDateString() {

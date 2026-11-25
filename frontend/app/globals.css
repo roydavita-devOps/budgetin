@@ -89,8 +89,11 @@ textarea {
   font: inherit;
 }
 
-.a11y-controls :is(input, select, button):focus-visible,
-.a11y-control:focus-visible {
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
   outline: 3px solid var(--info);
   outline-offset: 2px;
 }
