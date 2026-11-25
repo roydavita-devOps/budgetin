@@ -810,10 +810,11 @@ async function sendLastTransactions(message) {
     if (!response.ok) throw new Error(body.error || 'Gagal mengambil transaksi');
 
     const transactions = addDisplayNumbers(body.data, 0);
-    lastTransactionsByChat.set(String(chatId), transactions);
+    lastTransactionsByChat.delete(String(chatId));
+    pendingDeleteTransactionsByChat.delete(String(chatId));
     if (!transactions.length) return sendMessage(chatId, 'Belum ada transaksi.');
 
-    return sendMessage(
+    const sent = await sendMessage(
       chatId,
       [
         '10 transaksi terbaru:',
@@ -822,6 +823,8 @@ async function sendLastTransactions(message) {
         formatTransactions(transactions, 0),
       ].join('\n'),
     );
+    lastTransactionsByChat.set(String(chatId), transactions);
+    return sent;
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -850,13 +853,14 @@ async function sendTransactionHistory(message, text) {
     const hasNextPage = body.data.length > limit;
     const transactions = addDisplayNumbers(pageData, 0);
 
+    lastTransactionsByChat.delete(String(chatId));
+    pendingDeleteTransactionsByChat.delete(String(chatId));
+
     if (!transactions.length) {
       return sendMessage(chatId, page === 1 ? 'Belum ada transaksi.' : `Tidak ada transaksi di halaman ${page}.`);
     }
 
-    lastTransactionsByChat.set(String(chatId), transactions);
-
-    return sendMessage(
+    const sent = await sendMessage(
       chatId,
       [
         `Riwayat transaksi halaman ${page}`,
@@ -870,6 +874,8 @@ async function sendTransactionHistory(message, text) {
         historyPageChoices(page, hasNextPage),
       ].join('\n'),
     );
+    lastTransactionsByChat.set(String(chatId), transactions);
+    return sent;
   } catch (error) {
     return sendMessage(chatId, `Gagal: ${error.message}`);
   }
@@ -877,8 +883,7 @@ async function sendTransactionHistory(message, text) {
 
 async function deleteTransaction(message, text) {
   const chatId = message.chat.id;
-  const [, numbersRaw] = text.trim().split(/\s+/);
-  const selectedNumbers = parseTransactionNumbers(numbersRaw);
+  const selectedNumbers = parseTransactionNumbers(text);
   const cached = lastTransactionsByChat.get(String(chatId)) || [];
   const selectedTransactions = getTransactionsByDisplayNumbers(cached, selectedNumbers);
 
@@ -911,32 +916,21 @@ async function deleteTransaction(message, text) {
   }
 
   const transaction = selectedTransactions[0];
-
-  try {
-    const deleted = await deleteTransactionsByIds(message.from.id, [transaction.id]);
-    const body = deleted[0];
-
-    lastTransactionsByChat.set(
-      String(chatId),
-      cached.filter((item) => item.id !== transaction.id),
-    );
-    return sendMessage(
-      chatId,
-      [
-        `Dihapus: ${labelType(body.type)} ${formatIdr(body.amount)} ${body.category_label}`,
-        '',
-        'Ketik /riwayat untuk melihat daftar terbaru.',
-      ].join('\n'),
-    );
-  } catch (error) {
-    return sendMessage(chatId, `Gagal: ${error.message}`);
-  }
+  pendingDeleteTransactionsByChat.delete(String(chatId));
+  lastTransactionsByChat.delete(String(chatId));
+  const result = await deleteTransactionsByIds(message.from.id, [transaction.id]);
+  if (result.failed) return sendMessage(chatId, deleteResultMessage(result, 1));
+  const body = result.deleted[0];
+  return sendMessage(chatId, [
+    `Dihapus: ${labelType(body.type)} ${formatIdr(body.amount)} ${body.category_label}`,
+    '',
+    'Ketik /riwayat untuk melihat daftar terbaru.',
+  ].join('\n'));
 }
 
 async function confirmDeleteTransactions(message, text) {
   const chatId = message.chat.id;
-  const [, numbersRaw] = text.trim().split(/\s+/);
-  const selectedNumbers = parseTransactionNumbers(numbersRaw);
+  const selectedNumbers = parseTransactionNumbers(text);
   const pending = pendingDeleteTransactionsByChat.get(String(chatId));
 
   if (!selectedNumbers.length) {
@@ -952,28 +946,10 @@ async function confirmDeleteTransactions(message, text) {
     return sendMessage(chatId, 'Konfirmasi hapus sudah kedaluwarsa. Ketik /hapus 1,2,3 lagi jika masih ingin menghapus.');
   }
 
-  try {
-    const deleted = await deleteTransactionsByIds(message.from.id, pending.transactionIds);
-    const deletedIds = new Set(deleted.map((item) => item.id));
-    const cached = lastTransactionsByChat.get(String(chatId)) || [];
-
-    lastTransactionsByChat.set(
-      String(chatId),
-      cached.filter((item) => !deletedIds.has(item.id)),
-    );
-    pendingDeleteTransactionsByChat.delete(String(chatId));
-
-    return sendMessage(
-      chatId,
-      [
-        `Selesai. ${deleted.length} transaksi sudah dihapus.`,
-        '',
-        'Ketik /riwayat untuk melihat daftar terbaru.',
-      ].join('\n'),
-    );
-  } catch (error) {
-    return sendMessage(chatId, `Gagal: ${error.message}`);
-  }
+  pendingDeleteTransactionsByChat.delete(String(chatId));
+  lastTransactionsByChat.delete(String(chatId));
+  const result = await deleteTransactionsByIds(message.from.id, pending.transactionIds);
+  return sendMessage(chatId, deleteResultMessage(result, pending.transactionIds.length));
 }
 
 async function deleteTransactionsByIds(telegramUserId, transactionIds) {
@@ -981,16 +957,33 @@ async function deleteTransactionsByIds(telegramUserId, transactionIds) {
 
   for (const transactionId of transactionIds) {
     const params = new URLSearchParams({ telegram_user_id: String(telegramUserId) });
-    const response = await fetch(`${backendUrl}/telegram/transactions/${transactionId}?${params.toString()}`, {
-      method: 'DELETE',
-      headers: { 'x-bot-token': botInternalToken },
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Gagal menghapus transaksi');
-    deleted.push(body.data);
+    try {
+      const response = await fetch(`${backendUrl}/telegram/transactions/${transactionId}?${params.toString()}`, {
+        method: 'DELETE',
+        headers: { 'x-bot-token': botInternalToken },
+      });
+      if (!response.ok) return { deleted, failed: true };
+      const body = await response.json();
+      if (!body.data || String(body.data.id) !== String(transactionId)) return { deleted, failed: true };
+      deleted.push(body.data);
+    } catch {
+      return { deleted, failed: true };
+    }
   }
 
-  return deleted;
+  return { deleted, failed: false };
+}
+
+function deleteResultMessage(result, total) {
+  if (!result.failed) return `Selesai. ${result.deleted.length} transaksi sudah dihapus.\n\nKetik /riwayat untuk melihat daftar terbaru.`;
+  const remaining = total - result.deleted.length - 1;
+  return [
+    `${result.deleted.length} transaksi terkonfirmasi dihapus.`,
+    'Status 1 transaksi yang dicoba terakhir belum pasti.',
+    `${remaining} transaksi lainnya belum dicoba.`,
+    '',
+    'Ketik /riwayat untuk memeriksa daftar terbaru sebelum mencoba lagi.',
+  ].join('\n');
 }
 
 async function requestDeletion(message, requestType) {
@@ -1010,17 +1003,16 @@ async function requestDeletion(message, requestType) {
     });
     const body = await response.json();
     if (!response.ok && response.status !== 409) throw new Error(body.error || 'Gagal membuat permintaan hapus');
+    if (!body.request) throw new Error(body.error || 'Gagal membuat permintaan hapus');
 
     if (requestType === 'account') {
       return sendAccountDeletionRequestMessage(chatId, body.request, response.status === 409 ? body.error : '');
     }
 
-    if (response.ok) {
-      await notifyAdminsAboutDeletionRequest(body.request, body.admins || []);
-    }
+    const notified = response.ok ? await notifyAdminsAboutDeletionRequest(body.request, body.admins || []) : 0;
 
-    const pendingText = response.status === 409 ? body.error : `Permintaan ${deletionTypeLabel(requestType)} sudah dikirim ke admin.`;
-    const adminText = body.admins?.length ? 'Admin akan memproses setelah verifikasi.' : 'Belum ada admin Telegram aktif. Pastikan admin sudah /mulai dan share nomor.';
+    const pendingText = response.status === 409 ? body.error : `Permintaan ${deletionTypeLabel(requestType)} sudah dibuat.`;
+    const adminText = notified > 0 ? 'Notifikasi dikirim ke admin untuk ditinjau.' : 'Hubungi admin melalui /tentang untuk memeriksa status permintaan.';
     return sendMessage(
       chatId,
       [
@@ -1053,7 +1045,7 @@ function sendAccountDeletionRequestMessage(chatId, request, existingMessage = ''
       'Kalau command di bawah ini dikirim, akun langsung dinonaktifkan.',
       'Telegram dan dashboard web tidak bisa dipakai setelah itu.',
       '',
-      'Admin akan mendapat notifikasi dan masih bisa recovery maksimal 2 hari.',
+      'Bot akan mencoba memberi tahu admin. Akun masih bisa dipulihkan maksimal 2 hari.',
       'Lanjutkan hanya jika kamu sadar dan yakin.',
       '',
       'Copy command ini untuk konfirmasi:',
@@ -1094,7 +1086,7 @@ async function updateAccountDeletionRequest(message, text, action) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Gagal memproses hapus akun');
 
-    await notifyAdminsAboutAccountDeleted(body.user, body.request, body.admins || [], body.telegram || {
+    const notified = await notifyAdminsAboutAccountDeleted(body.user, body.request, body.admins || [], body.telegram || {
       telegram_user_id: String(message.from.id),
       telegram_chat_id: String(chatId),
       username: message.from.username || '',
@@ -1110,6 +1102,7 @@ async function updateAccountDeletionRequest(message, text, action) {
         body.request.request_code,
         '',
         `Admin masih bisa recovery sampai ${formatDateTime(body.user.delete_recovery_until)}.`,
+        notified ? 'Notifikasi dikirim ke admin.' : 'Notifikasi ke admin belum terkirim. Hubungi admin melalui /tentang.',
         'Jika ini tidak sengaja, segera hubungi admin Budgetin.',
       ].join('\n'),
     );
@@ -1136,12 +1129,12 @@ async function notifyAdminsAboutDeletionRequest(request, admins) {
     `/admin_tolak_hapus ${request.request_code}`,
   ].join('\n');
 
-  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
+  return sendAdminNotifications(uniqueChatIds, text);
 }
 
 async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramProfile) {
   const uniqueChatIds = new Set(admins.map((admin) => admin.telegram_chat_id).filter(Boolean));
-  if (!uniqueChatIds.size) return;
+  if (!uniqueChatIds.size) return 0;
 
   const telegramUserId = telegramProfile?.telegram_user_id || '-';
   const username = telegramProfile?.username ? `@${telegramProfile.username}` : '-';
@@ -1162,7 +1155,14 @@ async function notifyAdminsAboutAccountDeleted(user, request, admins, telegramPr
     `/admin_pulihkan_user ${telegramUserId}`,
   ].join('\n');
 
-  await Promise.all([...uniqueChatIds].map((adminChatId) => sendMessage(adminChatId, text).catch(() => null)));
+  return sendAdminNotifications(uniqueChatIds, text);
+}
+
+async function sendAdminNotifications(chatIds, text) {
+  const results = await Promise.allSettled([...chatIds].map((chatId) => sendMessage(chatId, text)));
+  const sent = results.filter((result) => result.status === 'fulfilled').length;
+  if (sent < results.length) console.error('Some admin notifications could not be delivered.');
+  return sent;
 }
 
 async function notifyAdminsAboutNewUser(user, admins, telegramProfile) {
@@ -1784,11 +1784,13 @@ function historyPageChoices(page, hasNextPage) {
   return choices.join('\n');
 }
 
-function parseTransactionNumbers(value) {
-  return [...new Set(String(value || '')
-    .split(',')
-    .map((item) => Number(item.trim()))
-    .filter((number) => Number.isInteger(number) && number > 0))];
+function parseTransactionNumbers(text) {
+  const parts = text.trim().split(/\s+/);
+  if (parts.length !== 2 || !/^\d+(,\d+)*$/.test(parts[1])) return [];
+  const numbers = parts[1].split(',').map(Number);
+  if (numbers.some((number) => !Number.isSafeInteger(number) || number < 1)
+    || new Set(numbers).size !== numbers.length) return [];
+  return numbers;
 }
 
 function getTransactionsByDisplayNumbers(transactions, selectedNumbers) {

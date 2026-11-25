@@ -41,3 +41,13 @@ Pengguna dengan tujuan chat lama yang bukan chat pribadi perlu menghubungkan kem
 - Respons yang sama mengurangi pengungkapan status nomor, tetapi tidak menghilangkan seluruh kemungkinan analisis waktu respons.
 - Dashboard mengambil semua halaman ke browser; ini memperbaiki batas 500 data tetapi dapat lebih berat pada akun yang sangat besar. Paginasi berbasis offset bukan snapshot dan perubahan transaksi yang bersamaan masih dapat menyebabkan hasil tidak konsisten; desain agregasi server dan paginasi snapshot perlu dievaluasi.
 - Belum ada pembuktian backup aktual di penyimpanan terenkripsi dan dibatasi aksesnya, kebijakan retensi, RPO/RTO, monitoring atau alert otomatis, maupun pemindaian menyeluruh seluruh sistem.
+
+## Lanjutan 25 November 2026
+
+- Konfirmasi penonaktifan akun serta keputusan admin untuk penghapusan memakai transaksi database dan penguncian permintaan; pembuatan permintaan juga diserialkan per akun. Penghapusan seluruh transaksi ditolak ketika akun sedang nonaktif atau diblokir. Pengujian sintetis memeriksa rollback dan permintaan bersamaan, termasuk kegagalan saat menghapus seluruh transaksi dan masa recovery.
+- Pemulihan melalui admin hanya dapat dilakukan sebelum tenggat yang tersimpan; perintah verifikasi dan blokir tidak dapat digunakan untuk mengubah akun nonaktif. Akun lama tanpa tenggat tidak dapat dipulihkan melalui perintah biasa dan memerlukan penanganan operator.
+- Filter tanggal pada daftar, ringkasan Telegram, dan ekspor menolak tanggal kalender atau rentang yang tidak valid. Pengujian mencakup hari kabisat dan batas WIB.
+- Bot menolak daftar pilihan hapus yang tidak valid dan menginformasikan hasil parsial atau belum pasti ketika penghapusan bertahap terhenti; pengguna diarahkan memeriksa riwayat sebelum mencoba lagi.
+- Input login dan filter riwayat diberi label, dan kontrol terkait diberi indikator fokus keyboard. Pemeriksaan visual, kontras menyeluruh, urutan Tab, dan pengujian dengan pengguna masih diperlukan.
+- Bot menyampaikan ketika notifikasi admin tidak dapat dikirim; belum tersedia antrian notifikasi persisten atau percobaan ulang otomatis. Pencegahan duplikasi pencatatan Telegram secara menyeluruh juga belum diimplementasikan. Penghapusan beberapa transaksi melalui bot masih bertahap, bukan operasi atomik. Migrasi database berversi dan agregasi/paginasi server juga belum selesai.
+- Worker yang ada tidak menghapus akun atau transaksi secara permanen setelah masa recovery; ia hanya memperbarui status permintaan. Jangan mengaktifkan penghapusan otomatis terhadap data lama tanpa keputusan pemilik, verifikasi dampak, dan rencana terpisah.

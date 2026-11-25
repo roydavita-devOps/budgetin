@@ -987,7 +987,7 @@ export default function Home() {
                 </button>
                 {canViewDashboard ? (
                   <>
-                    <input className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={selectedMonth} onChange={(event) => { if (event.target.value) setSelectedMonth(event.target.value); }} />
+                    <input aria-label="Periode dashboard" className="a11y-control field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" type="month" value={selectedMonth} onChange={(event) => { if (event.target.value) setSelectedMonth(event.target.value); }} />
                     <button className="danger-button rounded-2xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md lg:hidden" onClick={logout}>Logout</button>
                   </>
                 ) : null}
@@ -1015,14 +1015,20 @@ export default function Home() {
           ) : null}
 
           {!token && (
-            <section className="surface-card mx-auto w-full max-w-2xl rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
+            <section className="a11y-controls surface-card mx-auto w-full max-w-2xl rounded-[24px] p-6 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md sm:p-8">
               <div className="grid gap-4">
-                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input className="field-surface heading-text rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md" placeholder="+6281234567890" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} />
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <label className="grid gap-1" htmlFor="login-phone">
+                    <span className="text-sm font-medium">Nomor telepon</span>
+                    <input id="login-phone" className="field-surface heading-text rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md" placeholder="+6281234567890" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} />
+                  </label>
                   <button className="soft-button rounded-2xl px-4 py-3 font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={requestOtp}>Kirim OTP</button>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input className="field-surface heading-text rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md" placeholder="Kode OTP" value={otpCode} onChange={(event) => setOtpCode(event.target.value)} />
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <label className="grid gap-1" htmlFor="login-otp">
+                    <span className="text-sm font-medium">Kode OTP</span>
+                    <input id="login-otp" className="field-surface heading-text rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md" placeholder="Kode OTP" value={otpCode} onChange={(event) => setOtpCode(event.target.value)} />
+                  </label>
                   <button className="brand-button rounded-2xl px-4 py-3 font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={verifyOtp}>Masuk</button>
                 </div>
                 <p className="muted-text text-sm">{authMessage || 'Masuk untuk melihat dashboard pribadi kamu.'}</p>
@@ -1135,33 +1141,46 @@ export default function Home() {
                     <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={toggleBulkSelectMode}>
                       {isBulkSelectMode ? 'Batal pilih' : 'Pilih banyak'}
                     </button>
-                    <button className="soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', subcategory: '', sort: 'newest', search: '' })}>Reset filter</button>
+                    <button className="a11y-control soft-button rounded-xl px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md" onClick={() => setFilters({ type: '', category: '', subcategory: '', sort: 'newest', search: '' })}>Reset filter</button>
                   </div>
                 </div>
-                <div className="surface-soft mt-6 grid gap-3 rounded-[20px] p-4 lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr]">
-                  <input
-                    className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
-                    placeholder="Cari catatan, kategori, atau sub-kategori"
-                    value={filters.search}
-                    onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-                  />
-                    <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value, category: '', subcategory: '' })}>
-                    <option value="">Semua tipe</option>
-                    <option value="income">Pemasukan</option>
-                    <option value="expense">Pengeluaran</option>
-                  </select>
-                  <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
-                    <option value="">Semua kategori</option>
-                    {(filters.type ? categories[filters.type] : allCategories).map((category) => (
-                      <option key={category.code} value={category.code}>{category.label}</option>
-                    ))}
-                  </select>
-                  <select className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value })}>
-                    <option value="newest">Terbaru</option>
-                    <option value="oldest">Terlama</option>
-                    <option value="amount_desc">Nominal terbesar</option>
-                    <option value="amount_asc">Nominal terkecil</option>
-                  </select>
+                <div className="a11y-controls surface-soft mt-6 grid gap-3 rounded-[20px] p-4 lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.8fr]">
+                  <label className="grid gap-1" htmlFor="history-search">
+                    <span className="text-sm font-medium">Cari transaksi</span>
+                    <input
+                      id="history-search"
+                      className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out placeholder:text-[var(--text-soft)] focus:-translate-y-0.5 focus:shadow-md"
+                      placeholder="Cari catatan, kategori, atau sub-kategori"
+                      value={filters.search}
+                      onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+                    />
+                  </label>
+                  <label className="grid gap-1" htmlFor="history-type">
+                    <span className="text-sm font-medium">Tipe</span>
+                    <select id="history-type" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value, category: '', subcategory: '' })}>
+                      <option value="">Semua tipe</option>
+                      <option value="income">Pemasukan</option>
+                      <option value="expense">Pengeluaran</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1" htmlFor="history-category">
+                    <span className="text-sm font-medium">Kategori</span>
+                    <select id="history-category" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.category} onChange={(event) => setFilters({ ...filters, category: event.target.value })}>
+                      <option value="">Semua kategori</option>
+                      {(filters.type ? categories[filters.type] : allCategories).map((category) => (
+                        <option key={category.code} value={category.code}>{category.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1" htmlFor="history-sort">
+                    <span className="text-sm font-medium">Urutkan</span>
+                    <select id="history-sort" className="field-surface rounded-2xl px-4 py-3 outline-none transition-all duration-200 ease-out focus:-translate-y-0.5 focus:shadow-md" value={filters.sort} onChange={(event) => setFilters({ ...filters, sort: event.target.value })}>
+                      <option value="newest">Terbaru</option>
+                      <option value="oldest">Terlama</option>
+                      <option value="amount_desc">Nominal terbesar</option>
+                      <option value="amount_asc">Nominal terkecil</option>
+                    </select>
+                  </label>
                 </div>
                 {isBulkSelectMode ? (
                   <div className="surface-soft mt-4 flex flex-col gap-3 rounded-[20px] p-4 lg:flex-row lg:items-center lg:justify-between">
